@@ -783,54 +783,56 @@ function DashboardSection({ userKey, activeTrackKey, onChangeTrack }) {
       <CardHeader label="Preferences" title="Dashboard" icon={User} />
 
       <div className="space-y-3 p-3">
-        <div>
-          <SectionLabel>Preferred mode</SectionLabel>
-          <p className="mt-1 text-[11px] text-text-muted">
-            Open the app in your default track.
-          </p>
-        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="border border-border-subtle bg-base/60 p-3">
+            <SectionLabel>Preferred mode</SectionLabel>
+            <p className="mt-1 text-[11px] text-text-muted">
+              Open the app in your default track.
+            </p>
 
-        <div className="inline-flex items-center gap-1 border border-border-subtle bg-base p-1">
-          {PREFERRED_MODE_OPTIONS.map((mode) => (
-            <button
-              key={`preferred-mode-${mode.value}`}
-              type="button"
-              onClick={() => void onChangeTrack(mode.value)}
-              className={[
-                'inline-flex h-8 min-w-20 items-center justify-center border px-3 font-mono text-[11px] transition-colors',
-                activeTrackKey === mode.value
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
-              ].join(' ')}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
+            <div className="mt-3 inline-flex w-full items-center gap-1 border border-border-subtle bg-base p-1">
+              {PREFERRED_MODE_OPTIONS.map((mode) => (
+                <button
+                  key={`preferred-mode-${mode.value}`}
+                  type="button"
+                  onClick={() => void onChangeTrack(mode.value)}
+                  className={[
+                    'inline-flex h-8 min-w-0 flex-1 items-center justify-center border px-3 font-mono text-[11px] transition-colors',
+                    activeTrackKey === mode.value
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
+                  ].join(' ')}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-        <div className="border-t border-border-subtle" />
+          <div className="border border-border-subtle bg-base/60 p-3">
+            <SectionLabel>Comparison</SectionLabel>
+            <p className="mt-1 text-[11px] text-text-muted">
+              Choose whether the dashboard shows a peer comparison or only your own progress.
+            </p>
 
-        <div>
-          <SectionLabel>Comparison</SectionLabel>
-          <p className="mt-1 text-[11px] text-text-muted">Choose whether the dashboard shows a peer comparison or only your own progress.</p>
-        </div>
-
-        <div className="inline-flex items-center gap-1 border border-border-subtle bg-base p-1">
-          {DASHBOARD_COMPARISON_MODES.map((mode) => (
-            <button
-              key={`dashboard-comparison-${mode.value}`}
-              type="button"
-              onClick={() => void updateSettings({ dashboard_comparison_mode: mode.value })}
-              className={[
-                'inline-flex h-8 min-w-20 items-center justify-center border px-3 font-mono text-[11px] transition-colors',
-                settings.dashboard_comparison_mode === mode.value
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
-              ].join(' ')}
-            >
-              {mode.label}
-            </button>
-          ))}
+            <div className="mt-3 inline-flex w-full items-center gap-1 border border-border-subtle bg-base p-1">
+              {DASHBOARD_COMPARISON_MODES.map((mode) => (
+                <button
+                  key={`dashboard-comparison-${mode.value}`}
+                  type="button"
+                  onClick={() => void updateSettings({ dashboard_comparison_mode: mode.value })}
+                  className={[
+                    'inline-flex h-8 min-w-0 flex-1 items-center justify-center border px-3 font-mono text-[11px] transition-colors',
+                    settings.dashboard_comparison_mode === mode.value
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
+                  ].join(' ')}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </Motion.section>

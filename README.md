@@ -1,5 +1,9 @@
 # Practicer
 
+## Product
+
+Website overview and feature summary live in [PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md).
+
 Unified React + Supabase workspace for DSA and SQL practice, with a separate runner backend for code execution.
 
 ## App Setup

@@ -619,6 +619,7 @@ async function createDsaRun(req, res, body) {
       throw contentError
     }
 
+    const problemKey = String(content?.problem_key || '').trim() || null
     const entryPoint = String(content?.entry_point || '').trim()
     if (!entryPoint) {
       sendError(req, res, 400, 'Problem does not have an entry_point configured.')
