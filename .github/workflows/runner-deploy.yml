@@ -52,13 +52,20 @@ jobs:
           docker build -t dsa-runner:latest /opt/dsa-runner-src
           cd /opt/dsa-runner
           docker compose up -d
+          ready=0
           for i in $(seq 1 20); do
             if curl -sf http://127.0.0.1:8787/healthz >/dev/null; then
-              exit 0
+              ready=1
+              break
             fi
             sleep 2
           done
-          curl -sf http://127.0.0.1:8787/healthz >/dev/null
+          if [ "$ready" -ne 1 ]; then
+            docker compose ps
+            echo "--- RUNNER LOGS ---"
+            docker compose logs --tail=120 runner
+            exit 1
+          fi
           EOF
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
