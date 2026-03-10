@@ -1,0 +1,79 @@
+[
+  {
+    "problem_lc": 33,
+    "mode": "generic",
+    "tests": 8,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 37,
+    "mode": "custom",
+    "tests": 3,
+    "examples": 3,
+    "hasHarness": true
+  },
+  {
+    "problem_lc": 153,
+    "mode": "generic",
+    "tests": 8,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 167,
+    "mode": "generic",
+    "tests": 8,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 212,
+    "mode": "custom",
+    "tests": 4,
+    "examples": 4,
+    "hasHarness": true
+  },
+  {
+    "problem_lc": 227,
+    "mode": "generic",
+    "tests": 10,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 230,
+    "mode": "custom",
+    "tests": 6,
+    "examples": 4,
+    "hasHarness": true
+  },
+  {
+    "problem_lc": 287,
+    "mode": "generic",
+    "tests": 8,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 322,
+    "mode": "generic",
+    "tests": 8,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 778,
+    "mode": "generic",
+    "tests": 6,
+    "examples": 4,
+    "hasHarness": false
+  },
+  {
+    "problem_lc": 1219,
+    "mode": "generic",
+    "tests": 7,
+    "examples": 4,
+    "hasHarness": false
+  }
+]

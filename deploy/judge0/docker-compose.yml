@@ -1,0 +1,55 @@
+# Judge0 CE stack — deploy on a Linux host with cgroups v1 enabled.
+# See ../README.md for full EC2 deployment steps.
+#
+# IMPORTANT: Before running, copy judge0.conf.example → judge0.conf
+# and set unique POSTGRES_PASSWORD and REDIS_PASSWORD.
+
+services:
+  server:
+    image: judge0/judge0:1.13.1
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    ports:
+      - "2358:2358"  # 0.0.0.0 — accessible to runner container via host.docker.internal; blocked externally by SG
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  workers:
+    image: judge0/judge0:1.13.1
+    command: ["./scripts/workers"]
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:13-alpine
+    env_file: judge0.conf
+    volumes:
+      - judge0-postgres:/var/lib/postgresql/data/
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6-alpine
+    # $$REDIS_PASSWORD → shell sees $REDIS_PASSWORD (env_file injects it into this container)
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    env_file: judge0.conf
+    restart: unless-stopped
+
+volumes:
+  judge0-postgres:

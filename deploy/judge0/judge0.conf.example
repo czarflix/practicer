@@ -1,0 +1,31 @@
+# ─── PostgreSQL ───────────────────────────────────────────────────────────────
+POSTGRES_HOST=db
+POSTGRES_DB=judge0
+POSTGRES_USER=judge0
+# Set a strong unique password here — same value in REDIS_PASSWORD below
+POSTGRES_PASSWORD=CHANGE_ME_STRONG_PG_PASSWORD
+
+# ─── Redis ────────────────────────────────────────────────────────────────────
+REDIS_HOST=redis
+REDIS_PASSWORD=CHANGE_ME_STRONG_REDIS_PASSWORD
+
+# ─── Judge0 runtime defaults ──────────────────────────────────────────────────
+# Enable auth token header checks (set a secret and pass X-Auth-Token from runner)
+# Leave blank to disable auth (private network only — OK if runner is on same host)
+AUTHN_HEADER=X-Auth-Token
+AUTHN_TOKEN=
+
+# CPU / memory defaults — runner can override per-submission
+CPU_TIME_LIMIT=5
+CPU_EXTRA_TIME=1
+WALL_TIME_LIMIT=10
+MEMORY_LIMIT=262144
+STACK_LIMIT=65536
+MAX_FILE_SIZE=1024
+NUMBER_OF_RUNS=1
+
+# ─── Workers ──────────────────────────────────────────────────────────────────
+RAILS_MAX_THREADS=4
+
+# ─── Enable language 71 (Python 3.8) ─────────────────────────────────────────
+# Nothing extra needed — Python 3.8 (language_id 71) is included in judge0/judge0 image.

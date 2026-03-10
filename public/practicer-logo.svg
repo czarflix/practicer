@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240" fill="none">
+  <rect x="12" y="12" width="216" height="216" rx="52" fill="#050505"/>
+  <path d="M80 178V62H132C158.51 62 176 78.676 176 104C176 129.324 158.51 146 132 146H104" stroke="#14B8A6" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M108 178L140 146L166 172" stroke="#EDEDED" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="276" y="108" fill="#EDEDED" font-size="76" font-weight="650" font-family="Geist Sans, Segoe UI, sans-serif" letter-spacing="-2">Practicer</text>
+  <text x="280" y="156" fill="#A4A4A4" font-size="28" font-weight="500" font-family="Geist Sans, Segoe UI, sans-serif">Structured DSA and SQL practice.</text>
+</svg>

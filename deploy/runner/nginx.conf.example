@@ -1,0 +1,53 @@
+# nginx reverse proxy config for the DSA runner service.
+# Provides TLS termination so the frontend can call https://runner.yourdomain.com
+#
+# Prerequisites (on EC2):
+#   sudo apt install -y nginx certbot python3-certbot-nginx
+#   sudo certbot --nginx -d runner.yourdomain.com
+#
+# Then copy this file to /etc/nginx/sites-available/dsa-runner
+# and: sudo ln -s /etc/nginx/sites-available/dsa-runner /etc/nginx/sites-enabled/
+#      sudo nginx -t && sudo systemctl reload nginx
+#
+# Replace runner.yourdomain.com with your actual domain or Elastic IP-based domain.
+
+server {
+    listen 443 ssl;
+    server_name runner.yourdomain.com;
+
+    # Managed by Certbot
+    ssl_certificate     /etc/letsencrypt/live/runner.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/runner.yourdomain.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers
+    add_header X-Content-Type-Options   nosniff;
+    add_header X-Frame-Options          DENY;
+    add_header X-XSS-Protection         "1; mode=block";
+    add_header Referrer-Policy          "strict-origin-when-cross-origin";
+
+    # Restrict to your frontend origin at the nginx layer too
+    # (runner also enforces this via RUNNER_ALLOWED_ORIGIN)
+    location / {
+        proxy_pass         http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header   Host            $host;
+        proxy_set_header   X-Real-IP       $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto https;
+
+        # Increase timeout for judge execution
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 10s;
+
+        # Don't buffer — runner responses can be large (verdict JSON)
+        proxy_buffering off;
+    }
+}
+
+server {
+    listen 80;
+    server_name runner.yourdomain.com;
+    return 301 https://$host$request_uri;
+}

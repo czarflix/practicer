@@ -1,0 +1,50 @@
+# Runner service — co-deployed on the same EC2 host as Judge0.
+# Calls Judge0 on the host's docker bridge (172.17.0.1:2358 by default).
+# PostgreSQL 14 provides isolated SQL execution (never Supabase).
+#
+# Usage:
+#   cp .env.example .env   # fill in real values (including SQL_EXEC_PG_PASSWORD)
+#   docker compose up -d
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER: dsa_runner
+      POSTGRES_PASSWORD: ${SQL_EXEC_PG_PASSWORD:?Set SQL_EXEC_PG_PASSWORD in .env}
+      POSTGRES_DB: dsa_sql_exec
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dsa_runner -d dsa_sql_exec"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  runner:
+    build:
+      context: ../../runner-service
+      dockerfile: Dockerfile
+    image: dsa-runner:latest
+    env_file: .env
+    ports:
+      - "0.0.0.0:8787:8787"   # Expose to internet (lock down with nginx + TLS in prod)
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # On the same EC2 host as Judge0, talk to Judge0 via host networking.
+    # JUDGE0_URL should be set to http://172.17.0.1:2358 in .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8787/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+
