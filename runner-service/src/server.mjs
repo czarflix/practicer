@@ -811,4 +811,3 @@ const server = http.createServer(async (req, res) => {
 server.listen(runnerConfig.port, () => {
   process.stdout.write(`Runner service listening on http://localhost:${runnerConfig.port}\n`)
 })
-    const problemKey = String(content?.problem_key || '').trim() || null
