@@ -35,3 +35,8 @@ src/final_dataset.json
 *.njsproj
 *.sln
 *.sw?
+
+__pycache__/
+*.pyc
+supabase/.temp/
+deploy/docs/

@@ -29,6 +29,6 @@ jobs:
           cache: npm
           cache-dependency-path: runner-service/package-lock.json
       - run: npm --prefix runner-service ci
-      - run: node --check /home/runner/work/practicer/practicer/runner-service/src/server.mjs
-      - run: node --check /home/runner/work/practicer/practicer/runner-service/src/sql-runner.mjs
-      - run: node --check /home/runner/work/practicer/practicer/runner-service/src/corpus-loader.mjs
+      - run: node --check runner-service/src/server.mjs
+      - run: node --check runner-service/src/sql-runner.mjs
+      - run: node --check runner-service/src/corpus-loader.mjs
