@@ -52,6 +52,12 @@ jobs:
           docker build -t dsa-runner:latest /opt/dsa-runner-src
           cd /opt/dsa-runner
           docker compose up -d
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8787/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
           curl -sf http://127.0.0.1:8787/healthz >/dev/null
           EOF
         env:
