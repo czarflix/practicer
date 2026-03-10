@@ -40,3 +40,5 @@ __pycache__/
 *.pyc
 supabase/.temp/
 deploy/docs/
+# Local Netlify folder
+.netlify
