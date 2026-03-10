@@ -9,8 +9,6 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "import:problems": "node scripts/import-problems.mjs",
-    "import:dataset": "node scripts/import-dataset-content.mjs",
-    "import:final-dataset": "node scripts/import-final-dataset.mjs",
     "build:sql-import": "node scripts/build-sql-import.mjs",
     "validate:sql-import": "node scripts/validate-sql-import.mjs",
     "import:sql": "node scripts/import-sql-payload.mjs",

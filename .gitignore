@@ -17,6 +17,10 @@ out
 runner-service/.env
 deploy/ec2/.state
 *.pem
+docs/LeetCodeDataset-*.jsonl
+missing_27_problems.json
+missing_data_report.json
+src/final_dataset.json
 !.env.example
 !runner-service/.env.example
 !deploy/runner/.env.example

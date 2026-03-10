@@ -1,6 +1,6 @@
-# DSA Study App
+# Practicer
 
-Personal React + Supabase app for tracking 300 DSA problems (NeetCode + Companion), including notes, code versions, targets, and dataset-backed Python execution.
+Unified React + Supabase workspace for DSA and SQL practice, with a separate runner backend for code execution.
 
 ## App Setup
 
@@ -21,10 +21,11 @@ VITE_RUNNER_API_URL=http://localhost:8787
 
 ```bash
 npm run import:problems
-npm run import:dataset
+npm run import:sql
+npm run import:sql-presentation
 ```
 
-## Runner Service (Python only)
+## Runner Service
 
 Runner backend is in [runner-service](./runner-service/README.md).
 
@@ -33,8 +34,6 @@ npm --prefix runner-service install
 npm run runner:dev
 ```
 
-## SQL / Upgrade Docs
+## Deployment
 
-- Multi-user migration: [docs/multi-user-upgrade.sql](./docs/multi-user-upgrade.sql)
-- Runner/content migration: [docs/problem-content-runner-upgrade.sql](./docs/problem-content-runner-upgrade.sql)
-- Runner setup notes: [docs/runner-service.md](./docs/runner-service.md)
+Deployment scripts and infra notes live under [deploy](./deploy/README.md).
