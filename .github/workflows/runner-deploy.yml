@@ -51,6 +51,8 @@ jobs:
           set -euo pipefail
           docker build -t dsa-runner:latest /opt/dsa-runner-src
           cd /opt/dsa-runner
+          docker compose stop runner || true
+          docker rm -f dsa-runner-runner-1 || true
           docker compose up -d
           ready=0
           for i in $(seq 1 20); do
