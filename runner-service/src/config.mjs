@@ -42,6 +42,20 @@ export const runnerConfig = {
   cpuTimeLimitSeconds: toNumber(process.env.RUNNER_TIME_LIMIT, 2),
   wallTimeLimitSeconds: toNumber(process.env.RUNNER_WALL_TIME_LIMIT, 5),
   memoryLimitKb: toNumber(process.env.RUNNER_MEMORY_LIMIT_KB, 262144),
+
+  googleCloudProject: String(process.env.GOOGLE_CLOUD_PROJECT || '').trim(),
+  googleCloudLocation: String(process.env.GOOGLE_CLOUD_LOCATION || 'global').trim() || 'global',
+  vertexModelFlash: String(process.env.VERTEX_AI_MODEL_FLASH || 'gemini-3-flash').trim(),
+  vertexModelPro: String(process.env.VERTEX_AI_MODEL_PRO || 'gemini-3-pro').trim(),
+  backgroundModelFlash25: String(process.env.VERTEX_AI_BACKGROUND_MODEL || 'gemini-2.5-flash').trim(),
+  geminiApiBaseUrl:
+    String(process.env.GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta')
+      .trim()
+      .replace(/\/+$/, ''),
+  assistantCredentialEncryptionKey: String(process.env.AI_CREDENTIAL_ENCRYPTION_KEY || '').trim(),
+  assistantPlatformMonthlyHardCapUsd: toNumber(process.env.AI_PLATFORM_MONTHLY_HARD_CAP_USD, 180),
+  assistantUserDailySoftCapUsd: toNumber(process.env.AI_USER_DAILY_SOFT_CAP_USD, 8),
+  assistantUserDailyHardCapUsd: toNumber(process.env.AI_USER_DAILY_HARD_CAP_USD, 12),
 }
 
 export function validateConfig() {

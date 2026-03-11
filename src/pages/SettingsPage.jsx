@@ -20,6 +20,7 @@ import { useCurrentUser } from '../context/user-store'
 import { useNotificationPreferences } from '../hooks/useNotificationPreferences'
 import { useTargets } from '../hooks/useTargets'
 import { useUserSettings } from '../hooks/useUserSettings'
+import { assistantRequest, isAssistantConfigured } from '../lib/assistant-client'
 import { supabase, hasSupabaseCredentials } from '../lib/supabase'
 import { formatDate } from '../lib/problem-utils'
 
@@ -839,6 +840,188 @@ function DashboardSection({ userKey, activeTrackKey, onChangeTrack }) {
   )
 }
 
+function AISection({ userKey }) {
+  const { settings, update: updateSettings } = useUserSettings(userKey)
+  const [credentials, setCredentials] = useState([])
+  const [apiKey, setApiKey] = useState('')
+  const [label, setLabel] = useState('My Gemini key')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    if (!userKey || !isAssistantConfigured()) {
+      setCredentials([])
+      return
+    }
+
+    void (async () => {
+      try {
+        const data = await assistantRequest('/assistant/credentials')
+        setCredentials(data)
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Failed to load AI settings.')
+      }
+    })()
+  }, [userKey])
+
+  const activeCredential = credentials.find((item) => item.is_active) ?? null
+
+  const saveCredential = async () => {
+    if (!apiKey.trim()) {
+      setMessage('Gemini API key is required.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const data = await assistantRequest('/assistant/credentials', {
+        method: 'POST',
+        body: JSON.stringify({
+          api_key: apiKey.trim(),
+          label: label.trim() || 'My Gemini key',
+        }),
+      })
+      setCredentials([data])
+      setApiKey('')
+      setMessage('Gemini API key saved and validated.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to save Gemini API key.')
+    } finally {
+      setBusy(false)
+      setTimeout(() => setMessage(''), 4000)
+    }
+  }
+
+  const removeCredential = async () => {
+    if (!activeCredential) {
+      return
+    }
+
+    setBusy(true)
+    try {
+      await assistantRequest(`/assistant/credentials/${activeCredential.id}`, {
+        method: 'DELETE',
+      })
+      setCredentials([])
+      if (settings.preferred_ai_provider_mode === 'user_key') {
+        await updateSettings({ preferred_ai_provider_mode: 'platform' })
+      }
+      setMessage('Gemini API key removed.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to remove Gemini API key.')
+    } finally {
+      setBusy(false)
+      setTimeout(() => setMessage(''), 4000)
+    }
+  }
+
+  return (
+    <Motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ ...revealTransition, delay: 0.045 }}
+      className="border border-border-subtle bg-surface"
+    >
+      <CardHeader label="Preferences" title="AI Assistant" icon={KeyRound} />
+
+      <div className="space-y-3 p-3">
+        <div className="border border-border-subtle bg-base/60 p-2.5">
+          <SectionLabel>Provider</SectionLabel>
+          <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
+            Choose the default provider for new assistant chats.
+          </p>
+          <div className="mt-2 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
+            {[
+              { value: 'platform', label: 'Practicer AI' },
+              { value: 'user_key', label: 'Your Gemini Key' },
+            ].map((mode) => (
+              <button
+                key={`ai-provider-${mode.value}`}
+                type="button"
+                disabled={mode.value === 'user_key' && !activeCredential}
+                onClick={() => void updateSettings({ preferred_ai_provider_mode: mode.value })}
+                className={[
+                  'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2.5 font-mono text-[10px] transition-colors disabled:opacity-40',
+                  settings.preferred_ai_provider_mode === mode.value
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
+                ].join(' ')}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!isAssistantConfigured() ? (
+          <div className="border border-border-subtle bg-base px-3 py-2 text-[11px] text-text-muted">
+            Runner service is not configured. Set `VITE_RUNNER_API_URL` to enable the AI assistant.
+          </div>
+        ) : null}
+
+        <div className="border border-border-subtle bg-base/60 p-2.5">
+          <SectionLabel>Bring Your Own Key</SectionLabel>
+          <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
+            Save one Gemini API key for your own assistant usage. The key is validated by the backend and stored encrypted server-side.
+          </p>
+
+          {activeCredential ? (
+            <div className="mt-2 flex items-center justify-between gap-2 border border-border-subtle bg-base px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-text-primary">{activeCredential.label}</p>
+                <p className="mt-1 font-mono text-[11px] text-text-muted">
+                  ...{activeCredential.masked_suffix} · {activeCredential.validated_at ? 'Validated' : 'Saved'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void removeCredential()}
+                disabled={busy}
+                className="inline-flex h-8 items-center gap-1 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent disabled:opacity-60"
+              >
+                <Trash2 size={11} />
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 space-y-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Label</span>
+                <input
+                  type="text"
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
+                  className="h-8 border border-border-subtle bg-base px-2 text-xs text-text-primary outline-none focus:border-accent"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Gemini API Key</span>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="AIza..."
+                  className="h-8 border border-border-subtle bg-base px-2 text-xs text-text-primary outline-none focus:border-accent"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void saveCredential()}
+                disabled={busy || !isAssistantConfigured()}
+                className="inline-flex h-8 items-center gap-1 border border-accent bg-accent/10 px-3 text-xs text-accent disabled:opacity-60"
+              >
+                {busy ? <><Send size={12} /> Validating…</> : <><Plus size={12} /> Save Key</>}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {message ? <p className="text-[11px] text-accent">{message}</p> : null}
+      </div>
+    </Motion.section>
+  )
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
@@ -873,7 +1056,10 @@ export function SettingsPage() {
               activeTrackKey={activeTrackKey}
               onChangeTrack={setActiveTrackKey}
             />
-            <NotificationsSection userKey={userKey} />
+            <div className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
+              <AISection userKey={userKey} />
+              <NotificationsSection userKey={userKey} />
+            </div>
           </div>
         </div>
       </div>

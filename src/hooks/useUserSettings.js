@@ -6,6 +6,7 @@ const DEFAULTS = {
   solve_broadcast_mode: 'every_solve',
   milestone_threshold: 5,
   dashboard_comparison_mode: 'compare',
+  preferred_ai_provider_mode: 'platform',
 }
 
 export function useUserSettings(userKey) {
@@ -36,6 +37,7 @@ export function useUserSettings(userKey) {
         solve_broadcast_mode: data?.solve_broadcast_mode ?? DEFAULTS.solve_broadcast_mode,
         milestone_threshold: data?.milestone_threshold ?? DEFAULTS.milestone_threshold,
         dashboard_comparison_mode: data?.dashboard_comparison_mode ?? DEFAULTS.dashboard_comparison_mode,
+        preferred_ai_provider_mode: data?.preferred_ai_provider_mode ?? DEFAULTS.preferred_ai_provider_mode,
       })
     } catch (err) {
       console.error('[useUserSettings] fetch error:', err)

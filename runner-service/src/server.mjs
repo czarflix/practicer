@@ -1,6 +1,17 @@
 import http from 'node:http'
 import process from 'node:process'
 import { createClient } from '@supabase/supabase-js'
+import {
+  authenticateAssistantRequest,
+  createAssistantThread,
+  deleteAssistantCredential,
+  getAssistantCredentialSummary,
+  listAssistantMessages,
+  listAssistantThreads,
+  saveAssistantCredential,
+  streamAssistantReply,
+  updateAssistantThread,
+} from './assistant-service.mjs'
 import { buildDatasetHarness, buildPythonHarness, parseHarnessResult } from './harness.mjs'
 import { validateConfig, runnerConfig } from './config.mjs'
 import { runOnJudge0 } from './judge0.mjs'
@@ -38,8 +49,8 @@ function setCorsHeaders(req, res) {
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin)
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   res.setHeader('Access-Control-Max-Age', '86400')
   res.setHeader('Vary', 'Origin')
 }
@@ -52,6 +63,19 @@ function sendJson(req, res, statusCode, payload) {
 
 function sendError(req, res, statusCode, message) {
   sendJson(req, res, statusCode, { error: message })
+}
+
+function beginEventStream(req, res) {
+  setCorsHeaders(req, res)
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  })
+}
+
+function writeEvent(res, payload) {
+  res.write(`${JSON.stringify(payload)}\n`)
 }
 
 async function readJsonBody(req) {
@@ -751,6 +775,227 @@ async function getRun(req, res, runId, userKey) {
   }
 }
 
+async function requireAssistantAuth(req, res) {
+  try {
+    return await authenticateAssistantRequest(req, supabase)
+  } catch (error) {
+    sendError(req, res, 401, error instanceof Error ? error.message : 'Unauthorized.')
+    return null
+  }
+}
+
+async function handleAssistantThreadsList(req, res, url) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const problemKey = String(url.searchParams.get('problem_key') || '').trim()
+  if (!problemKey) {
+    sendError(req, res, 400, 'problem_key query param is required.')
+    return
+  }
+
+  try {
+    const data = await listAssistantThreads({
+      supabase,
+      userKey: auth.userKey,
+      problemKey,
+    })
+    sendJson(req, res, 200, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to load threads.')
+  }
+}
+
+async function handleAssistantThreadCreate(req, res) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  try {
+    const body = await readJsonBody(req)
+    const problemKey = String(body?.problem_key || '').trim()
+    const trackKey = String(body?.track_key || 'dsa').trim()
+    if (!problemKey) {
+      sendError(req, res, 400, 'problem_key is required.')
+      return
+    }
+
+    const data = await createAssistantThread({
+      supabase,
+      userKey: auth.userKey,
+      problemKey,
+      trackKey,
+      title: body?.title,
+      providerMode: body?.provider_mode,
+    })
+    sendJson(req, res, 201, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to create thread.')
+  }
+}
+
+async function handleAssistantThreadUpdate(req, res, threadId) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const numericThreadId = toSafeNumber(threadId)
+  if (!numericThreadId) {
+    sendError(req, res, 400, 'Invalid thread id.')
+    return
+  }
+
+  try {
+    const body = await readJsonBody(req)
+    const data = await updateAssistantThread({
+      supabase,
+      userKey: auth.userKey,
+      threadId: numericThreadId,
+      patch: body,
+    })
+    sendJson(req, res, 200, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to update thread.')
+  }
+}
+
+async function handleAssistantMessagesList(req, res, threadId) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const numericThreadId = toSafeNumber(threadId)
+  if (!numericThreadId) {
+    sendError(req, res, 400, 'Invalid thread id.')
+    return
+  }
+
+  try {
+    const data = await listAssistantMessages({
+      supabase,
+      userKey: auth.userKey,
+      threadId: numericThreadId,
+    })
+    sendJson(req, res, 200, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to load messages.')
+  }
+}
+
+async function handleAssistantMessageStream(req, res, threadId) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const numericThreadId = toSafeNumber(threadId)
+  if (!numericThreadId) {
+    sendError(req, res, 400, 'Invalid thread id.')
+    return
+  }
+
+  let body
+  try {
+    body = await readJsonBody(req)
+  } catch (error) {
+    sendError(req, res, 400, error instanceof Error ? error.message : 'Invalid request body.')
+    return
+  }
+
+  beginEventStream(req, res)
+  writeEvent(res, { type: 'status', stage: 'accepted', message: 'Assistant request accepted.' })
+
+  try {
+    await streamAssistantReply({
+      supabase,
+      userKey: auth.userKey,
+      threadId: numericThreadId,
+      message: body?.message,
+      intent: body?.intent,
+      attachments: body?.attachments || {},
+      editorSnapshot: body?.editor_snapshot || '',
+      noteSnapshot: body?.note_snapshot || null,
+      onEvent: (payload) => {
+        writeEvent(res, payload)
+      },
+    })
+    writeEvent(res, { type: 'done' })
+  } catch (error) {
+    writeEvent(res, {
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Assistant request failed.',
+    })
+  } finally {
+    res.end()
+  }
+}
+
+async function handleAssistantCredentialsGet(req, res) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  try {
+    const data = await getAssistantCredentialSummary({
+      supabase,
+      userKey: auth.userKey,
+    })
+    sendJson(req, res, 200, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to load AI credentials.')
+  }
+}
+
+async function handleAssistantCredentialsSave(req, res) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  try {
+    const body = await readJsonBody(req)
+    const data = await saveAssistantCredential({
+      supabase,
+      userKey: auth.userKey,
+      apiKey: body?.api_key,
+      label: body?.label,
+    })
+    sendJson(req, res, 201, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to save AI credential.')
+  }
+}
+
+async function handleAssistantCredentialsDelete(req, res, credentialId) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const numericCredentialId = toSafeNumber(credentialId)
+  if (!numericCredentialId) {
+    sendError(req, res, 400, 'Invalid credential id.')
+    return
+  }
+
+  try {
+    const data = await deleteAssistantCredential({
+      supabase,
+      userKey: auth.userKey,
+      credentialId: numericCredentialId,
+    })
+    sendJson(req, res, 200, data)
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to delete AI credential.')
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   if (!req.url || !req.method) {
     sendError(req, res, 400, 'Invalid request.')
@@ -778,6 +1023,50 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       now: new Date().toISOString(),
     })
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/assistant/threads') {
+    await handleAssistantThreadsList(req, res, url)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/assistant/threads') {
+    await handleAssistantThreadCreate(req, res)
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/assistant/credentials') {
+    await handleAssistantCredentialsGet(req, res)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/assistant/credentials') {
+    await handleAssistantCredentialsSave(req, res)
+    return
+  }
+
+  const assistantCredentialMatch = url.pathname.match(/^\/assistant\/credentials\/(\d+)$/)
+  if (req.method === 'DELETE' && assistantCredentialMatch) {
+    await handleAssistantCredentialsDelete(req, res, assistantCredentialMatch[1])
+    return
+  }
+
+  const assistantThreadMatch = url.pathname.match(/^\/assistant\/threads\/(\d+)$/)
+  if (req.method === 'PATCH' && assistantThreadMatch) {
+    await handleAssistantThreadUpdate(req, res, assistantThreadMatch[1])
+    return
+  }
+
+  const assistantMessagesMatch = url.pathname.match(/^\/assistant\/threads\/(\d+)\/messages$/)
+  if (req.method === 'GET' && assistantMessagesMatch) {
+    await handleAssistantMessagesList(req, res, assistantMessagesMatch[1])
+    return
+  }
+
+  const assistantStreamMatch = url.pathname.match(/^\/assistant\/threads\/(\d+)\/messages\/stream$/)
+  if (req.method === 'POST' && assistantStreamMatch) {
+    await handleAssistantMessageStream(req, res, assistantStreamMatch[1])
     return
   }
 

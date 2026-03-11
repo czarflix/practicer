@@ -34,6 +34,7 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CodeEditor } from '../components/editors/CodeEditor'
 import { NoteEditor } from '../components/editors/NoteEditor'
+import { ProblemAssistantDrawer } from '../components/assistant/ProblemAssistantDrawer'
 import { ProblemVisualGallery } from '../components/problems/ProblemVisualGallery'
 import { Modal } from '../components/ui/Modal'
 import { CompanySymbols } from '../components/ui/CompanySymbols'
@@ -45,6 +46,7 @@ import { useProblemBundle } from '../hooks/useProblemBundle'
 import { useProblemNavigator } from '../hooks/useProblemNavigator'
 import { useSharedNotes } from '../hooks/useSharedNotes'
 import { useSharedSolutions } from '../hooks/useSharedSolutions'
+import { useUserSettings } from '../hooks/useUserSettings'
 import {
   formatDate,
   getYoutubeEmbedUrl,
@@ -55,6 +57,7 @@ import {
   toNumber,
 } from '../lib/problem-utils'
 import { extractProblemVisuals } from '../lib/problem-visuals'
+import { appendBlocksToNoteDoc, blocksToNoteDoc, tableToMarkdown } from '../lib/assistant-notes'
 import { buttonTap, outputSwap, panelSwap } from '../lib/motion'
 import { missingSupabaseMessage, supabase } from '../lib/supabase'
 
@@ -242,6 +245,65 @@ function defaultNoteContent() {
     type: 'doc',
     content: [{ type: 'paragraph' }],
   }
+}
+
+function buildNotePayload(title, summary, blocks) {
+  return {
+    title,
+    summary,
+    blocks,
+  }
+}
+
+function buildCodeBlock(code, language, heading = '') {
+  return {
+    kind: language === 'sql' ? 'sql' : 'code',
+    heading,
+    code: String(code || '').trim(),
+    language,
+  }
+}
+
+function solutionSortOrderValue(solution) {
+  const numeric = Number(solution?.sort_order)
+  return Number.isFinite(numeric) ? numeric : Number.MAX_SAFE_INTEGER
+}
+
+function solutionUpdatedAtValue(solution) {
+  const timestamp = Date.parse(solution?.updated_at || solution?.created_at || '')
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function dedupeSolutionsBySortOrder(solutions) {
+  const entries = Array.isArray(solutions) ? solutions : []
+  const byOrder = new Map()
+
+  for (const solution of entries) {
+    const key = solutionSortOrderValue(solution)
+    const existing = byOrder.get(key)
+    if (!existing || solutionUpdatedAtValue(solution) > solutionUpdatedAtValue(existing)) {
+      byOrder.set(key, solution)
+    }
+  }
+
+  return Array.from(byOrder.values()).sort((left, right) => {
+    const orderDelta = solutionSortOrderValue(left) - solutionSortOrderValue(right)
+    if (orderDelta !== 0) {
+      return orderDelta
+    }
+    return (left?.id ?? 0) - (right?.id ?? 0)
+  })
+}
+
+function nextSolutionSortOrder(solutions) {
+  return (Array.isArray(solutions) ? solutions : []).reduce((maxValue, solution) => {
+    const numeric = Number(solution?.sort_order)
+    return Number.isFinite(numeric) ? Math.max(maxValue, numeric) : maxValue
+  }, -1) + 1
+}
+
+async function copyValueToClipboard(value) {
+  await navigator.clipboard.writeText(String(value || ''))
 }
 
 function emptyResourceForm() {
@@ -2378,6 +2440,7 @@ export function ProblemDetailPage() {
   const problemState = useProblemBundle(problemIdentifier)
   const queryClient = useQueryClient()
   const { userKey } = useCurrentUser()
+  const userSettingsState = useUserSettings(userKey)
   const navigate = useNavigate()
   const problemKey = problemState.data?.problemKey || ''
   const problemLc = problemState.data?.lc ?? lcFromSlug(slug)
@@ -2389,6 +2452,8 @@ export function ProblemDetailPage() {
 
   const [leftTab, setLeftTab] = useState('problem')
   const [rightTab, setRightTab] = useState('tests')
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [assistantLaunch, setAssistantLaunch] = useState(null)
   const [focusedTestIds, setFocusedTestIds] = useState([])
   const [selectedSqlSampleId, setSelectedSqlSampleId] = useState(null)
   const [notesView, setNotesView] = useState('mine')
@@ -2487,6 +2552,7 @@ export function ProblemDetailPage() {
   const trackKey = problemState.data?.trackKey || 'dsa'
   const isSqlTrack = trackKey === 'sql'
   const editorLanguage = problemState.data?.content?.editorLanguage || (isSqlTrack ? 'sql' : 'python')
+  const preferredAiProviderMode = userSettingsState.settings?.preferred_ai_provider_mode || 'platform'
   const rightPaneDefaultTab = isSqlTrack ? 'output' : 'tests'
   const effectiveRightTab = isSqlTrack && ['tests', 'cases', 'fixtures', 'stdout', 'result'].includes(rightTab) ? 'results' : rightTab
 
@@ -2552,12 +2618,14 @@ export function ProblemDetailPage() {
       return
     }
 
+    const nextProblemSolutions = dedupeSolutionsBySortOrder(problemState.data.solutions ?? [])
+
     pendingNotePatchesRef.current.clear()
     pendingSolutionPatchesRef.current.clear()
     setDirtyNoteIds(new Set())
     setSavingNoteIds(new Set())
     setNotes(problemState.data.notes ?? [])
-    setSolutions(problemState.data.solutions ?? [])
+    setSolutions(nextProblemSolutions)
     setResources(problemState.data.resources ?? [])
     setProgress(problemState.data.progress ?? null)
 
@@ -2570,13 +2638,18 @@ export function ProblemDetailPage() {
     })
 
     setSelectedSolutionId((current) => {
-      const exists = (problemState.data.solutions ?? []).some((solution) => solution.id === current)
+      const exists = nextProblemSolutions.some((solution) => solution.id === current)
       if (exists) {
         return current
       }
-      return problemState.data.solutions?.[0]?.id ?? null
+      return nextProblemSolutions[0]?.id ?? null
     })
   }, [problemState.data])
+
+  useEffect(() => {
+    setAssistantOpen(false)
+    setAssistantLaunch(null)
+  }, [problemKey, problemLc])
 
   useEffect(() => {
     const activeTestIds = new Set(
@@ -2630,9 +2703,10 @@ export function ProblemDetailPage() {
   )
   const activeNoteSharedRecord = activeNote ? ownSharedNotesBySourceId.get(activeNote.id) ?? null : null
 
+  const visibleSolutions = useMemo(() => dedupeSolutionsBySortOrder(solutions), [solutions])
   const activeSolution = useMemo(
-    () => solutions.find((solution) => solution.id === selectedSolutionId) ?? solutions[0] ?? null,
-    [selectedSolutionId, solutions],
+    () => visibleSolutions.find((solution) => solution.id === selectedSolutionId) ?? visibleSolutions[0] ?? null,
+    [selectedSolutionId, visibleSolutions],
   )
 
   useEffect(() => {
@@ -2658,6 +2732,32 @@ export function ProblemDetailPage() {
   useEffect(() => {
     setIsRenamingSolution(false)
   }, [selectedSolutionId])
+
+  useEffect(() => {
+    if (visibleSolutions.length === 0) {
+      if (selectedSolutionId !== null) {
+        setSelectedSolutionId(null)
+      }
+      return
+    }
+
+    if (visibleSolutions.some((solution) => solution.id === selectedSolutionId)) {
+      return
+    }
+
+    const currentRaw = solutions.find((solution) => solution.id === selectedSolutionId)
+    if (currentRaw) {
+      const replacement = visibleSolutions.find(
+        (solution) => solutionSortOrderValue(solution) === solutionSortOrderValue(currentRaw),
+      )
+      if (replacement?.id) {
+        setSelectedSolutionId(replacement.id)
+        return
+      }
+    }
+
+    setSelectedSolutionId(visibleSolutions[0].id)
+  }, [selectedSolutionId, solutions, visibleSolutions])
 
   useEffect(() => {
     if (!activeSolution?.id) {
@@ -3047,6 +3147,42 @@ export function ProblemDetailPage() {
     })
   }
 
+  const insertAiPayloadIntoCurrentNote = useCallback(
+    async (payload) => {
+      const noteLabel = `AI Assistant — ${payload?.title || 'Chat'}`
+      if (!activeNote) {
+        await createNoteVersion({
+          sortOrder: notes.length,
+          label: noteLabel,
+          seedContent: blocksToNoteDoc(payload),
+        })
+        return
+      }
+
+      const nextContent = appendBlocksToNoteDoc(activeNote.content || defaultNoteContent(), payload)
+      setNotes((current) =>
+        current.map((note) => (note.id === activeNote.id ? { ...note, content: nextContent } : note)),
+      )
+      queueNoteSave(activeNote.id, {
+        content: nextContent,
+      })
+      setSelectedNoteId(activeNote.id)
+      setLeftTab('notes')
+    },
+    [activeNote, createNoteVersion, notes.length, queueNoteSave],
+  )
+
+  const createAiNoteFromPayload = useCallback(
+    async (payload) => {
+      await createNoteVersion({
+        sortOrder: notes.length,
+        label: `AI Assistant — ${payload?.title || 'Chat'}`,
+        seedContent: blocksToNoteDoc(payload),
+      })
+    },
+    [createNoteVersion, notes.length],
+  )
+
   const deleteNote = async (id) => {
     if (!supabase || (!problemLc && !problemKey)) {
       return
@@ -3097,7 +3233,7 @@ export function ProblemDetailPage() {
       }
 
       try {
-        const nextSortOrder = Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : solutions.length
+        const nextSortOrder = Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : nextSolutionSortOrder(solutions)
         const label = String(customLabel || `Version ${nextSortOrder + 1}`).trim() || `Version ${nextSortOrder + 1}`
         const starter = problemState.data?.content?.starterSnippet || problemState.data?.content?.starterCode || ''
         const nextCode = seedCode || starter || ''
@@ -3133,14 +3269,14 @@ export function ProblemDetailPage() {
         return null
       }
     },
-    [editorLanguage, invalidateCaches, isSqlTrack, problemKey, problemLc, problemState.data?.content?.starterCode, problemState.data?.content?.starterSnippet, solutions.length, userKey, setSectionMessage],
+    [editorLanguage, invalidateCaches, isSqlTrack, problemKey, problemLc, problemState.data?.content?.starterCode, problemState.data?.content?.starterSnippet, solutions, userKey, setSectionMessage],
   )
 
   const addSolution = async () => {
     const carriedCode =
       activeSolution?.code || problemState.data?.content?.starterSnippet || problemState.data?.content?.starterCode || ''
     await createSolutionVersion({
-      sortOrder: solutions.length,
+      sortOrder: nextSolutionSortOrder(solutions),
       seedCode: carriedCode,
     })
   }
@@ -3198,7 +3334,7 @@ export function ProblemDetailPage() {
     }
 
     await createSolutionVersion({
-      sortOrder: solutions.length,
+      sortOrder: nextSolutionSortOrder(solutions),
       seedCode: submittedCode,
       label: `Submit ${run.id}`,
     })
@@ -3210,10 +3346,17 @@ export function ProblemDetailPage() {
     }
 
     if ((problemState.data.solutions ?? []).length > 0 || solutions.length > 0) {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(`solution-seeded:${userKey}:${problemKey || problemLc}`, '1')
+      }
       return
     }
 
     const seedKey = `${userKey}:${problemKey || problemLc}`
+    const sessionSeedKey = `solution-seeded:${seedKey}`
+    if (typeof window !== 'undefined' && window.sessionStorage.getItem(sessionSeedKey) === '1') {
+      return
+    }
     if (
       defaultSolutionSeededRef.current.has(seedKey) ||
       defaultSolutionSeedingRef.current.has(seedKey)
@@ -3231,6 +3374,9 @@ export function ProblemDetailPage() {
 
         if (created?.id) {
           defaultSolutionSeededRef.current.add(seedKey)
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.setItem(sessionSeedKey, '1')
+          }
         }
       } finally {
         defaultSolutionSeedingRef.current.delete(seedKey)
@@ -3393,6 +3539,20 @@ export function ProblemDetailPage() {
 
   const toggleBottomPane = useCallback(() => {
     setBottomPaneCollapsed((current) => !current)
+  }, [])
+
+  const openAssistant = useCallback(
+    (launch = null) => {
+      setLeftPaneCollapsed(false)
+      setAssistantOpen(true)
+      setAssistantLaunch(launch)
+    },
+    [],
+  )
+
+  const closeAssistant = useCallback(() => {
+    setAssistantOpen(false)
+    setAssistantLaunch(null)
   }, [])
 
   const executeRun = async (mode) => {
@@ -3781,6 +3941,131 @@ export function ProblemDetailPage() {
       : data.active.neetcodeUrl
         ? 'NeetCode'
         : sourcePlatformForProblem(data.row)
+  const assistantProblemSummary = {
+    problemKey,
+    trackKey,
+    title: data.active.title,
+    tier: data.active.tier,
+    phaseName: activePhaseName,
+    statement: sqlPresentation?.statement || contentPresentation.statement,
+    exampleCount: examples.length,
+    schemaCount: Array.isArray(sqlPresentation?.schema) ? sqlPresentation.schema.length : 0,
+    constraintCount: Array.isArray(contentPresentation.constraints) ? contentPresentation.constraints.length : 0,
+  }
+  const assistantWorkspaceContext = {
+    editorText: activeSolution?.code || '',
+    activeNoteId: activeNote?.id ?? null,
+    activeNoteLabel: activeNote?.label || '',
+    activeNoteContent: activeNote?.content || defaultNoteContent(),
+    selectedRunId:
+      selectedResultRun?.id ||
+      selectedSqlPublicRun?.id ||
+      selectedSqlSubmitRun?.id ||
+      runOutput.runId ||
+      null,
+    selectedRunStatus:
+      selectedResultRun?.status ||
+      selectedSqlPublicRun?.status ||
+      selectedSqlSubmitRun?.status ||
+      runOutput.status ||
+      '',
+    selectedCaseIds: focusedTestIds,
+    selectedFixtureId: selectedSqlSampleFixture ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id) : null,
+    fixtures: sqlSampleFixtures,
+  }
+  const showDesktopAssistant = assistantOpen && !leftPaneCollapsed && isWideLayout
+  const showMobileAssistant = assistantOpen && !isWideLayout
+
+  const launchAssistantWithPreset = (launch = {}) => {
+    openAssistant({
+      message: launch.message || '',
+      attachments: {
+        include_problem: true,
+        include_editor: Boolean(assistantWorkspaceContext.editorText.trim()),
+        include_latest_run: Boolean(assistantWorkspaceContext.selectedRunId),
+        include_note: false,
+        include_stdout: false,
+        selected_case_ids: assistantWorkspaceContext.selectedCaseIds,
+        selected_fixture_id: assistantWorkspaceContext.selectedFixtureId,
+        selected_run_id: assistantWorkspaceContext.selectedRunId,
+        note_id: assistantWorkspaceContext.activeNoteId,
+        provider_mode: preferredAiProviderMode,
+        ...(launch.attachments || {}),
+      },
+    })
+  }
+
+  const copySelectedSqlOutput = async () => {
+    if (!selectedSqlPublicCase?.output) {
+      return
+    }
+
+    const markdown = tableToMarkdown(selectedSqlPublicCase.output)
+    await copyValueToClipboard(markdown || JSON.stringify(selectedSqlPublicCase.output, null, 2))
+  }
+
+  const insertSelectedSqlOutputIntoNote = async () => {
+    if (!selectedSqlPublicCase?.output) {
+      return
+    }
+
+    const markdown = tableToMarkdown(selectedSqlPublicCase.output)
+    await insertAiPayloadIntoCurrentNote(
+      buildNotePayload(
+        'SQL Sample Output',
+        selectedSqlSampleFixture?.label || 'Visible output from the latest sample run.',
+        [buildCodeBlock(markdown || JSON.stringify(selectedSqlPublicCase.output, null, 2), 'markdown', 'Output')],
+      ),
+    )
+  }
+
+  const copySelectedDsaResult = async () => {
+    if (!selectedResultRun) {
+      return
+    }
+
+    await copyValueToClipboard(
+      JSON.stringify(
+        {
+          status: selectedResultRun.status,
+          tests_passed: selectedResultRun.tests_passed,
+          tests_total: selectedResultRun.tests_total,
+          runtime_ms: selectedResultRun.runtime_ms,
+          memory_kb: selectedResultRun.memory_kb,
+          stderr: selectedResultRun.stderr || selectedResultRun.compile_output || '',
+        },
+        null,
+        2,
+      ),
+    )
+  }
+
+  const insertSelectedDsaResultIntoNote = async () => {
+    if (!selectedResultRun) {
+      return
+    }
+
+    await insertAiPayloadIntoCurrentNote(
+      buildNotePayload('Run Result', `${selectedResultRun.tests_passed ?? 0}/${selectedResultRun.tests_total ?? 0} tests passed`, [
+        buildCodeBlock(
+          JSON.stringify(
+            {
+              status: selectedResultRun.status,
+              tests_passed: selectedResultRun.tests_passed,
+              tests_total: selectedResultRun.tests_total,
+              runtime_ms: selectedResultRun.runtime_ms,
+              memory_kb: selectedResultRun.memory_kb,
+              stderr: selectedResultRun.stderr || selectedResultRun.compile_output || '',
+            },
+            null,
+            2,
+          ),
+          'json',
+          'Evaluator summary',
+        ),
+      ]),
+    )
+  }
 
   return (
     <section className="h-[100dvh] w-full overflow-hidden p-3 md:p-4">
@@ -3900,9 +4185,29 @@ export function ProblemDetailPage() {
         <div ref={workspaceSplitRef} className="flex h-full min-h-0 min-w-0 w-full flex-col gap-3 xl:flex-row">
           {!leftPaneCollapsed ? (
             <section
-              className="flex min-h-0 min-w-0 w-full flex-col border border-border-subtle bg-surface xl:shrink-0"
+              className={[
+                'flex min-h-0 min-w-0 w-full flex-col xl:shrink-0',
+                showDesktopAssistant ? '' : 'border border-border-subtle bg-surface',
+              ].join(' ')}
               style={isWideLayout ? { width: `${leftPaneWidth}%` } : undefined}
             >
+            {showDesktopAssistant ? (
+              <ProblemAssistantDrawer
+                open={assistantOpen}
+                onClose={closeAssistant}
+                problem={assistantProblemSummary}
+                workspaceContext={assistantWorkspaceContext}
+                preferredProviderMode={preferredAiProviderMode}
+                onProviderPreferenceChange={(nextMode) => {
+                  void userSettingsState.update({ preferred_ai_provider_mode: nextMode })
+                }}
+                initialLaunch={assistantLaunch}
+                onLaunchHandled={() => setAssistantLaunch(null)}
+                onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
+                onCreateAiNote={createAiNoteFromPayload}
+              />
+            ) : (
+              <>
             <div className="flex min-w-0 items-center border-b border-border-subtle">
               <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
                 <div className="flex min-w-max items-center">
@@ -4457,7 +4762,7 @@ export function ProblemDetailPage() {
                       onSelectSharedSolution={setSelectedSharedSolutionId}
                       onLoadCode={async (code) => {
                         await createSolutionVersion({
-                          sortOrder: solutions.length,
+                          sortOrder: nextSolutionSortOrder(solutions),
                           seedCode: code,
                         })
                       }}
@@ -4478,6 +4783,8 @@ export function ProblemDetailPage() {
 	              </AnimatePresence>
 
 	            </div>
+              </>
+            )}
           </section>
           ) : null}
 
@@ -4510,7 +4817,7 @@ export function ProblemDetailPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
                     <div className="flex min-w-max items-center gap-1">
-                      {solutions.map((solution) => (
+                      {visibleSolutions.map((solution) => (
                         <button
                           key={`solution-chip-${solution.id}`}
                           type="button"
@@ -4540,11 +4847,11 @@ export function ProblemDetailPage() {
                     >
                       <Plus size={12} />
                     </button>
-                    {activeSolution ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsRenamingSolution((current) => !current)
+                      {activeSolution ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsRenamingSolution((current) => !current)
                         }}
                         title="Rename version"
                         className="inline-flex h-7 w-7 items-center justify-center border border-border-subtle text-text-muted hover:border-accent hover:text-accent"
@@ -4585,6 +4892,34 @@ export function ProblemDetailPage() {
                         <X size={11} />
                       </button>
                     ) : null}
+                    <Motion.button
+                      type="button"
+                      onClick={() =>
+                        launchAssistantWithPreset({
+                          attachments: {
+                            include_latest_run: Boolean(
+                              isSqlTrack ? selectedSqlPublicRun?.id || selectedSqlSubmitRun?.id : selectedResultRun?.id,
+                            ),
+                            selected_run_id:
+                              isSqlTrack
+                                ? selectedSqlPublicRun?.id || selectedSqlSubmitRun?.id || null
+                                : selectedResultRun?.id || null,
+                            selected_fixture_id: isSqlTrack
+                              ? selectedSqlSampleFixture
+                                ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id)
+                                : null
+                              : null,
+                            selected_case_ids: !isSqlTrack ? focusedTestIds : [],
+                          },
+                        })
+                      }
+                      className="inline-flex h-7 items-center gap-1 border border-border-subtle px-2 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+                      whileTap={buttonTap.whileTap}
+                      transition={buttonTap.transition}
+                    >
+                      <MessageSquareReply size={11} />
+                      Ask AI
+                    </Motion.button>
                     <Motion.button
                       type="button"
                       onClick={() => {
@@ -4798,16 +5133,38 @@ export function ProblemDetailPage() {
                               <FileCode2 size={13} className="text-text-muted" />
                               <p className="text-sm text-text-primary">Sample Output</p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setLeftTab('data')
-                                setLeftPaneCollapsed(false)
-                              }}
-                              className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent"
-                            >
-                              Open Data
-                            </button>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLeftTab('data')
+                                  setLeftPaneCollapsed(false)
+                                }}
+                                className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent"
+                              >
+                                Open Data
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void copySelectedSqlOutput()
+                                }}
+                                disabled={!selectedSqlPublicCase?.output}
+                                className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+                              >
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void insertSelectedSqlOutputIntoNote()
+                                }}
+                                disabled={!selectedSqlPublicCase?.output}
+                                className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+                              >
+                                Insert
+                              </button>
+                            </div>
                           </div>
                         ) : null}
                         {selectedSqlPublicRun ? (
@@ -4852,12 +5209,36 @@ export function ProblemDetailPage() {
                         exit="exit"
                         className="border border-border-subtle bg-base p-3"
                       >
-                        <div className="flex items-center gap-2">
-                          <FileCode2 size={13} className="text-text-muted" />
-                          <p className="text-sm text-text-primary">
-                            {runOutput.mode ? `${runOutput.mode.toUpperCase()} · ` : ''}
-                            {runOutput.status || 'Idle'}
-                          </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <FileCode2 size={13} className="text-text-muted" />
+                            <p className="text-sm text-text-primary">
+                              {runOutput.mode ? `${runOutput.mode.toUpperCase()} · ` : ''}
+                              {runOutput.status || 'Idle'}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void copySelectedDsaResult()
+                              }}
+                              disabled={!selectedResultRun}
+                              className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+                            >
+                              Copy
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void insertSelectedDsaResultIntoNote()
+                              }}
+                              disabled={!selectedResultRun}
+                              className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+                            >
+                              Insert
+                            </button>
+                          </div>
                         </div>
                         <p className="mt-2 text-xs text-text-muted">
                           {runOutput.message || 'Run or submit your current code version.'}
@@ -4934,9 +5315,65 @@ export function ProblemDetailPage() {
                       >
                         {selectedSqlSubmitRun ? (
                           <>
-                            <div className="flex items-center gap-2">
-                              <FileCode2 size={13} className="text-text-muted" />
-                              <p className="text-sm text-text-primary">Submission Results</p>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <FileCode2 size={13} className="text-text-muted" />
+                                <p className="text-sm text-text-primary">Submission Results</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void copyValueToClipboard(
+                                      JSON.stringify(
+                                        {
+                                          status: selectedSqlSubmitRun.status,
+                                          tests_passed: selectedSqlSubmitRun.tests_passed,
+                                          tests_total: selectedSqlSubmitRun.tests_total,
+                                          runtime_ms: selectedSqlSubmitRun.runtime_ms,
+                                          memory_kb: selectedSqlSubmitRun.memory_kb,
+                                        },
+                                        null,
+                                        2,
+                                      ),
+                                    )
+                                  }
+                                  className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent"
+                                >
+                                  Copy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void insertAiPayloadIntoCurrentNote(
+                                      buildNotePayload(
+                                        'SQL Submission Results',
+                                        `${selectedSqlSubmitRun.tests_passed ?? 0}/${selectedSqlSubmitRun.tests_total ?? 0} checks passed`,
+                                        [
+                                          buildCodeBlock(
+                                            JSON.stringify(
+                                              {
+                                                status: selectedSqlSubmitRun.status,
+                                                tests_passed: selectedSqlSubmitRun.tests_passed,
+                                                tests_total: selectedSqlSubmitRun.tests_total,
+                                                runtime_ms: selectedSqlSubmitRun.runtime_ms,
+                                                memory_kb: selectedSqlSubmitRun.memory_kb,
+                                              },
+                                              null,
+                                              2,
+                                            ),
+                                            'json',
+                                            'Submission summary',
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  }
+                                  className="inline-flex h-6 items-center border border-border-subtle px-2 text-[10px] text-text-muted hover:border-accent hover:text-accent"
+                                >
+                                  Insert
+                                </button>
+                              </div>
                             </div>
                             <p className="mt-2 text-xs text-text-muted">
                               {selectedSqlSubmitRun.status === 'passed'
@@ -5098,6 +5535,24 @@ export function ProblemDetailPage() {
             </div>
           </section>
         </div>
+
+        {showMobileAssistant ? (
+          <ProblemAssistantDrawer
+            open={assistantOpen}
+            mobile
+            onClose={closeAssistant}
+            problem={assistantProblemSummary}
+            workspaceContext={assistantWorkspaceContext}
+            preferredProviderMode={preferredAiProviderMode}
+            onProviderPreferenceChange={(nextMode) => {
+              void userSettingsState.update({ preferred_ai_provider_mode: nextMode })
+            }}
+            initialLaunch={assistantLaunch}
+            onLaunchHandled={() => setAssistantLaunch(null)}
+            onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
+            onCreateAiNote={createAiNoteFromPayload}
+          />
+        ) : null}
 
         <Modal
           open={resetConfirmOpen}

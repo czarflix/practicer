@@ -10,6 +10,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
     "dotenv": "^16.5.0",
+    "google-auth-library": "^10.6.1",
     "pg": "^8.13.3"
   }
 }
