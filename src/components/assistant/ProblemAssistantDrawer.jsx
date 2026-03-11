@@ -14,12 +14,12 @@ import {
   Plus,
   Search,
   Send,
-  Sparkles,
   StickyNote,
   X,
 } from 'lucide-react'
 import { assistantRequest, assistantStream, isAssistantConfigured } from '../../lib/assistant-client'
 import { FAST_TRANSITION, SPRING_TRANSITION } from '../../lib/motion'
+import { AssistantRichText } from './AssistantRichText'
 
 const SLASH_COMMANDS = [
   { command: '/hint', intent: 'hint', label: 'Hint' },
@@ -29,10 +29,32 @@ const SLASH_COMMANDS = [
   { command: '/solution', intent: 'reveal_full_solution', label: 'Solution' },
   { command: '/explain', intent: 'explain', label: 'Explain' },
 ]
+const ASSIST_MODE = 'assist'
+const CHAT_MODE = 'chat'
+const CHAT_MODE_OPTIONS = [
+  { value: ASSIST_MODE, label: 'Assist' },
+  { value: CHAT_MODE, label: 'Chat' },
+]
+
+function normalizeChatMode(value) {
+  return value === CHAT_MODE ? CHAT_MODE : ASSIST_MODE
+}
+
+function noticeClass(tone = 'info') {
+  if (tone === 'success') {
+    return 'border-accent/45 bg-accent/10 text-text-primary'
+  }
+
+  if (tone === 'error') {
+    return 'assistant-warning-surface'
+  }
+
+  return 'border-border-subtle bg-surface text-text-primary'
+}
 
 function iconButtonClass({ subtle = false } = {}) {
   return [
-    'inline-flex h-8 w-8 items-center justify-center border transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+    'inline-flex h-7 w-7 items-center justify-center border transition-colors disabled:cursor-not-allowed disabled:opacity-40',
     subtle
       ? 'border-transparent text-text-muted hover:border-border-subtle hover:bg-base hover:text-accent'
       : 'border-border-subtle bg-base text-text-muted hover:border-accent hover:text-accent',
@@ -48,7 +70,7 @@ function menuItemClass(active = false) {
 
 function pillButtonClass(active = false) {
   return [
-    'inline-flex h-7 items-center border px-2.5 text-[11px] transition-colors',
+    'inline-flex h-6 items-center border px-2.5 text-[11px] transition-colors',
     active
       ? 'border-accent bg-accent/10 text-accent'
       : 'border-border-subtle bg-base text-text-muted hover:border-accent hover:text-accent',
@@ -106,7 +128,22 @@ function buildDefaultMessage(intent, trackKey) {
   }
 }
 
-function buildBaseAttachments(workspaceContext, providerMode) {
+function buildBaseAttachments(workspaceContext, providerMode, chatMode = ASSIST_MODE) {
+  if (normalizeChatMode(chatMode) === CHAT_MODE) {
+    return {
+      include_problem: true,
+      include_editor: Boolean(workspaceContext?.editorText?.trim()),
+      include_latest_run: false,
+      include_note: false,
+      include_stdout: false,
+      selected_case_ids: [],
+      selected_fixture_id: null,
+      selected_run_id: null,
+      note_id: null,
+      provider_mode: providerMode,
+    }
+  }
+
   return {
     include_problem: true,
     include_editor: Boolean(workspaceContext?.editorText?.trim()),
@@ -119,6 +156,111 @@ function buildBaseAttachments(workspaceContext, providerMode) {
     note_id: workspaceContext?.activeNoteId || null,
     provider_mode: providerMode,
   }
+}
+
+function syncChatAttachments(currentAttachments, workspaceContext, providerMode) {
+  const next = {
+    ...currentAttachments,
+    provider_mode: providerMode,
+  }
+
+  const hasEditor = Boolean(workspaceContext?.editorText?.trim())
+  const hasRun = Boolean(workspaceContext?.selectedRunId)
+  const hasNote = Boolean(workspaceContext?.activeNoteId)
+  const hasStdout = Boolean(workspaceContext?.stdoutText?.trim())
+
+  if (!hasEditor) {
+    next.include_editor = false
+  }
+
+  if (!hasRun) {
+    next.include_latest_run = false
+    next.selected_run_id = null
+    next.selected_case_ids = []
+    next.selected_fixture_id = null
+    if (!hasStdout) {
+      next.include_stdout = false
+    }
+  } else {
+    if (next.include_latest_run || next.include_stdout) {
+      next.selected_run_id = workspaceContext?.selectedRunId || null
+    }
+    if (next.include_latest_run) {
+      next.selected_case_ids = Array.isArray(workspaceContext?.selectedCaseIds) ? workspaceContext.selectedCaseIds : []
+      next.selected_fixture_id = workspaceContext?.selectedFixtureId || null
+    } else {
+      next.selected_case_ids = []
+      next.selected_fixture_id = null
+    }
+  }
+
+  if (!hasNote) {
+    next.include_note = false
+    next.note_id = null
+  } else if (next.include_note) {
+    next.note_id = workspaceContext?.activeNoteId || null
+  }
+
+  if (!hasStdout) {
+    next.include_stdout = false
+  }
+
+  return next
+}
+
+function getChatAttachmentChips(attachments, workspaceContext, trackKey) {
+  const chips = []
+
+  if (attachments.include_problem) {
+    chips.push({ key: 'problem', label: 'Problem' })
+  }
+
+  if (attachments.include_editor) {
+    chips.push({ key: 'editor', label: trackKey === 'sql' ? 'Current query' : 'Current code' })
+  }
+
+  if (attachments.include_latest_run) {
+    chips.push({
+      key: 'run',
+      label: attachments.selected_run_id ? `Run #${attachments.selected_run_id}` : 'Latest run',
+    })
+  }
+
+  if (attachments.include_note) {
+    chips.push({ key: 'note', label: 'Note' })
+  }
+
+  if (attachments.include_stdout) {
+    chips.push({ key: 'stdout', label: 'Stdout' })
+  }
+
+  return chips
+}
+
+function getChatAttachmentMenuItems(attachments, workspaceContext, trackKey) {
+  const items = []
+
+  if (!attachments.include_problem) {
+    items.push({ key: 'problem', label: 'Problem' })
+  }
+
+  if (!attachments.include_editor && workspaceContext?.editorText?.trim()) {
+    items.push({ key: 'editor', label: trackKey === 'sql' ? 'Current query' : 'Current code' })
+  }
+
+  if (!attachments.include_latest_run && workspaceContext?.selectedRunId) {
+    items.push({ key: 'run', label: 'Latest run' })
+  }
+
+  if (!attachments.include_note && workspaceContext?.activeNoteId) {
+    items.push({ key: 'note', label: 'Current note' })
+  }
+
+  if (!attachments.include_stdout && workspaceContext?.stdoutText?.trim()) {
+    items.push({ key: 'stdout', label: 'Stdout' })
+  }
+
+  return items
 }
 
 function getContextItems(attachments, workspaceContext, trackKey) {
@@ -239,8 +381,61 @@ function buildEmptyStateSuggestions(problem, workspaceContext) {
   return suggestions.slice(0, 3)
 }
 
+function buildModeThreadMap(threads) {
+  return {
+    [ASSIST_MODE]: threads.filter((thread) => normalizeChatMode(thread?.chat_mode) === ASSIST_MODE),
+    [CHAT_MODE]: threads.filter((thread) => normalizeChatMode(thread?.chat_mode) === CHAT_MODE),
+  }
+}
+
 function threadPreview(thread) {
   return String(thread?.rolling_summary || '').trim()
+}
+
+function AssistantNoticeStack({ notices, onDismiss, onAction }) {
+  if (notices.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex w-[min(320px,calc(100%-32px))] flex-col gap-2">
+      <AnimatePresence initial={false}>
+        {notices.map((notice) => (
+          <Motion.div
+            key={`assistant-notice-${notice.id}`}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={FAST_TRANSITION}
+            className={[
+              'pointer-events-auto border px-3 py-2 shadow-[0_12px_32px_rgba(0,0,0,0.16)]',
+              noticeClass(notice.tone),
+            ].join(' ')}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 flex-1 text-[12px] leading-5">{notice.message}</p>
+              <button
+                type="button"
+                onClick={() => onDismiss(notice.id)}
+                className="inline-flex h-6 w-6 items-center justify-center text-text-muted hover:text-accent"
+              >
+                <X size={12} />
+              </button>
+            </div>
+            {notice.actionLabel ? (
+              <button
+                type="button"
+                onClick={() => onAction(notice)}
+                className="mt-2 inline-flex h-7 items-center border border-border-subtle px-2 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+              >
+                {notice.actionLabel}
+              </button>
+            ) : null}
+          </Motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  )
 }
 
 function assistantBlockLabel(block) {
@@ -288,6 +483,7 @@ function useDismissableLayer(open, refs, onDismiss) {
 function AssistantHeader({
   problem,
   activeThread,
+  chatMode,
   hasUserCredential,
   providerMode,
   overflowOpen,
@@ -298,26 +494,46 @@ function AssistantHeader({
   onClose,
   onCreateThread,
   onBeginRename,
+  onChangeChatMode,
   onSwitchProviderMode,
 }) {
   return (
-    <header className="relative border-b border-border-subtle px-4 py-4">
-      <div className="flex items-start justify-between gap-4">
+    <header className="relative border-b border-border-subtle px-3 py-2.5">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium tracking-[0.08em] text-text-muted">Assistant</p>
-          <h2 className="mt-2 truncate text-lg font-medium text-text-primary">{problem?.title || 'Practicer AI'}</h2>
-          <p className="mt-1 truncate text-[12px] text-text-muted">
-            {(problem?.trackKey || 'dsa').toUpperCase()} · Tier {problem?.tier ?? '-'} · {problem?.phaseName || 'Practice'}
-            {activeThread?.title && activeThread.title !== 'New chat' ? ` · ${activeThread.title}` : ''}
-          </p>
+          <p className="text-[10px] font-medium tracking-[0.06em] text-text-muted">Assistant</p>
+          <h2 className="mt-1 truncate text-[16px] font-medium text-text-primary">{problem?.title || 'Practicer AI'}</h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <p className="truncate text-[11px] text-text-muted">
+              {(problem?.trackKey || 'dsa').toUpperCase()} · Tier {problem?.tier ?? '-'} · {problem?.phaseName || 'Practice'}
+              {activeThread?.title && activeThread.title !== 'New chat' ? ` · ${activeThread.title}` : ''}
+            </p>
+            <div className="inline-flex items-center gap-0.5 border border-border-subtle bg-base p-0.5">
+              {CHAT_MODE_OPTIONS.map((option) => (
+                <button
+                  key={`assistant-chat-mode-${option.value}`}
+                  type="button"
+                  onClick={() => onChangeChatMode(option.value)}
+                  className={[
+                    'inline-flex h-5.5 items-center border px-2 text-[10px] transition-colors',
+                    chatMode === option.value
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
+                  ].join(' ')}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <button
             type="button"
             title="Chat history"
             onClick={onOpenHistory}
-            className={iconButtonClass()}
+            className={iconButtonClass({ subtle: true })}
           >
             <History size={14} />
           </button>
@@ -326,7 +542,7 @@ function AssistantHeader({
             type="button"
             title="Assistant options"
             onClick={onToggleOverflow}
-            className={iconButtonClass()}
+            className={iconButtonClass({ subtle: true })}
           >
             <MoreHorizontal size={14} />
           </button>
@@ -334,7 +550,7 @@ function AssistantHeader({
             type="button"
             title="Close assistant"
             onClick={onClose}
-            className={iconButtonClass()}
+            className={iconButtonClass({ subtle: true })}
           >
             <X size={14} />
           </button>
@@ -390,6 +606,7 @@ function AssistantHeader({
 function AssistantHistoryModal({
   open,
   mobile,
+  chatMode,
   threads,
   selectedThreadId,
   loading,
@@ -505,7 +722,9 @@ function AssistantHistoryModal({
         >
           <div className="border-b border-border-subtle px-4 py-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium text-text-primary">History</h3>
+              <h3 className="text-sm font-medium text-text-primary">
+                {chatMode === CHAT_MODE ? 'Chat history' : 'Assist history'}
+              </h3>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={onCreateThread} className={pillButtonClass(true)}>
                   <Plus size={12} />
@@ -659,20 +878,113 @@ function AssistantContextPopover({
   )
 }
 
-function CodeBlock({ block }) {
+function ChatAttachmentRail({
+  attachments,
+  workspaceContext,
+  trackKey,
+  onAddAttachment,
+  onRemoveAttachment,
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const anchorRef = useRef(null)
+  const menuRef = useRef(null)
+  const chips = useMemo(
+    () => getChatAttachmentChips(attachments, workspaceContext, trackKey),
+    [attachments, trackKey, workspaceContext],
+  )
+  const menuItems = useMemo(
+    () => getChatAttachmentMenuItems(attachments, workspaceContext, trackKey),
+    [attachments, trackKey, workspaceContext],
+  )
+
+  useDismissableLayer(menuOpen, [anchorRef, menuRef], () => setMenuOpen(false))
+
+  return (
+    <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+      {chips.map((chip) => (
+        <span
+          key={`chat-attachment-chip-${chip.key}`}
+          className="inline-flex h-6 items-center gap-1.5 border border-border-subtle bg-base px-2 text-[10px] text-text-primary"
+        >
+          <span>{chip.label}</span>
+          <button
+            type="button"
+            title={`Remove ${chip.label}`}
+            onClick={() => onRemoveAttachment(chip.key)}
+            className="inline-flex h-4 w-4 items-center justify-center text-text-muted hover:text-accent"
+          >
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+
+      <div className="relative">
+        <button
+          ref={anchorRef}
+          type="button"
+          onClick={() => setMenuOpen((current) => !current)}
+          className="inline-flex h-6 items-center gap-1.5 border border-border-subtle bg-base px-2 text-[10px] text-text-muted transition-colors hover:border-accent hover:text-accent"
+        >
+          <Plus size={12} />
+          Attach
+        </button>
+
+        <AnimatePresence>
+          {menuOpen ? (
+            <Motion.div
+              ref={menuRef}
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={FAST_TRANSITION}
+              className="absolute left-0 top-[calc(100%+8px)] z-30 min-w-[180px] overflow-hidden border border-border-subtle bg-surface shadow-[0_18px_48px_rgba(0,0,0,0.18)]"
+            >
+              {menuItems.length > 0 ? (
+                menuItems.map((item) => (
+                  <button
+                    key={`chat-attachment-option-${item.key}`}
+                    type="button"
+                    onClick={() => {
+                      onAddAttachment(item.key)
+                      setMenuOpen(false)
+                    }}
+                    className={menuItemClass()}
+                  >
+                    <span>{item.label}</span>
+                    <Plus size={12} />
+                  </button>
+                ))
+              ) : (
+                <div className="px-3 py-2 text-[11px] text-text-muted">Nothing else to attach.</div>
+              )}
+            </Motion.div>
+          ) : null}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+
+function BlockCopyButton({ title = 'Copy block', onClick }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="inline-flex h-7 w-7 items-center justify-center text-text-muted opacity-70 transition-opacity hover:text-accent md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+    >
+      <Copy size={12} />
+    </button>
+  )
+}
+
+function CodeBlock({ block, onCopy }) {
   const copyValue = block.copy_value || block.code || ''
   return (
-    <section className="group relative mt-4 overflow-hidden border border-border-subtle bg-base">
+    <section className="group relative mt-5 overflow-hidden border border-border-subtle bg-base">
       <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-3 py-2">
         <p className="text-[11px] text-text-muted">{assistantBlockLabel(block)}</p>
-        <button
-          type="button"
-          title="Copy block"
-          onClick={() => void copyText(copyValue)}
-          className="inline-flex h-7 w-7 items-center justify-center text-text-muted opacity-0 transition-opacity hover:text-accent group-hover:opacity-100 group-focus-within:opacity-100"
-        >
-          <Copy size={12} />
-        </button>
+        <BlockCopyButton onClick={() => onCopy(copyValue)} />
       </div>
       <pre className="overflow-x-auto whitespace-pre-wrap px-3 py-3 font-mono text-[11px] leading-6 text-text-primary">
         {block.code}
@@ -681,39 +993,115 @@ function CodeBlock({ block }) {
   )
 }
 
-function AssistantMessageArticle({ message, onInsertMessage, onCreateNoteFromMessage }) {
-  const isAssistant = message.role === 'assistant'
-  const blocks = Array.isArray(message?.content?.blocks) ? message.content.blocks : []
-  const summary = isAssistant ? message?.content?.summary : message?.content?.text
-
-  if (!isAssistant) {
-    return (
-      <article className="ml-auto max-w-[76%] border border-border-subtle bg-base px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-[11px] text-text-muted">
-            <Sparkles size={12} className="text-accent" />
-            <span>You</span>
-          </div>
-          <span className="font-mono text-[10px] text-text-muted">{formatRelativeDate(message.created_at)}</span>
+function AssistantTextBlock({ block, onCopy }) {
+  if (block.kind === 'bullets' || block.kind === 'checklist') {
+      return (
+      <section key={block.id} className="group relative mt-4 max-w-[64ch] pr-8">
+        {block.heading ? <p className="mb-2 text-[11px] text-text-muted">{block.heading}</p> : null}
+        <div className="absolute right-0 top-0">
+          <BlockCopyButton onClick={() => onCopy(block.copy_value || '')} />
         </div>
-        {summary ? <p className="mt-2 whitespace-pre-wrap text-[13px] leading-6 text-text-primary">{summary}</p> : null}
-      </article>
+        <ul className="space-y-2.5 text-[14px] leading-7 text-text-primary">
+          {block.items.map((item, index) => (
+            <li key={`${block.id}-item-${index}`} className="flex gap-2.5">
+              <span className="mt-[13px] h-1.5 w-1.5 shrink-0 rounded-full bg-accent/80" />
+              <AssistantRichText as="span" text={item} className="assistant-rich-copy" />
+            </li>
+          ))}
+        </ul>
+      </section>
+    )
+  }
+
+  if (block.kind === 'warning') {
+    return (
+      <section key={block.id} className="group relative mt-4 max-w-[64ch] overflow-hidden border assistant-warning-surface px-3.5 py-3 pr-10">
+        <div className="absolute right-2 top-2">
+          <BlockCopyButton onClick={() => onCopy(block.copy_value || block.text || '')} />
+        </div>
+        {block.heading ? <p className="mb-2 text-[11px] text-current/80">{block.heading}</p> : null}
+        <AssistantRichText text={block.text} className="assistant-rich-copy text-[14px] leading-7" />
+      </section>
     )
   }
 
   return (
-    <article className="group border border-border-subtle bg-surface px-5 py-4">
-      <div className="flex items-start justify-between gap-4">
+    <section
+      key={block.id}
+      className={[
+        'group relative mt-4 max-w-[64ch] pr-8 text-[14px] leading-7 text-text-primary',
+        block.kind === 'result_explanation' ? 'border-l border-accent/45 pl-4' : '',
+      ].join(' ')}
+    >
+      <div className="absolute right-0 top-0">
+        <BlockCopyButton onClick={() => onCopy(block.copy_value || block.text || '')} />
+      </div>
+      {block.heading ? <p className="mb-1.5 text-[11px] text-text-muted">{block.heading}</p> : null}
+      <AssistantRichText text={block.text} className="assistant-rich-copy" />
+    </section>
+  )
+}
+
+function AssistantFailureNotice({ message }) {
+  const blocks = Array.isArray(message?.content?.blocks) ? message.content.blocks : []
+  const visibleWarning = blocks.find((block) => {
+    const text = String(block?.text || '').trim()
+    return block?.kind === 'warning' && text && !/^Intent:/i.test(text)
+  })
+  const detail = String(
+    visibleWarning?.text
+      || message?.content?.summary
+      || 'The assistant could not complete this turn.',
+  ).trim()
+
+  return (
+    <article className="max-w-[64ch] border border-border-subtle bg-base px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
+          <p className="text-[12px] font-medium text-text-primary">{message?.content?.title || 'Assistant unavailable'}</p>
+          <p className="mt-1 text-[13px] leading-6 text-text-muted">{detail}</p>
+        </div>
+        <span className="shrink-0 font-mono text-[10px] text-text-muted">{formatRelativeDate(message.created_at)}</span>
+      </div>
+    </article>
+  )
+}
+
+function AssistantMessageArticle({ message, onInsertMessage, onCreateNoteFromMessage, onCopyBlock }) {
+  const isAssistant = message.role === 'assistant'
+  const blocks = Array.isArray(message?.content?.blocks) ? message.content.blocks : []
+  const summary = isAssistant ? message?.content?.summary : message?.content?.text
+  const isFailure = isAssistant && (message.status === 'error' || String(message?.content?.title || '').trim() === 'Assistant unavailable')
+
+  if (!isAssistant) {
+    return (
+      <article className="ml-auto w-full max-w-[380px] border border-border-subtle bg-base px-3.5 py-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[10px] text-text-muted">You</span>
+          <span className="font-mono text-[10px] text-text-muted">{formatRelativeDate(message.created_at)}</span>
+        </div>
+        {summary ? <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-text-primary">{summary}</p> : null}
+      </article>
+    )
+  }
+
+  if (isFailure) {
+    return <AssistantFailureNotice message={message} />
+  }
+
+  return (
+    <article className="group w-full">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 max-w-[64ch]">
           <div className="flex items-center gap-2 text-[11px] text-text-muted">
             <Bot size={12} className="text-accent" />
             <span>Assistant</span>
           </div>
           {message?.content?.title ? (
-            <h3 className="mt-2 text-[15px] font-medium text-text-primary">{message.content.title}</h3>
+            <h3 className="mt-1.5 text-[17px] font-medium tracking-[-0.01em] text-text-primary">{message.content.title}</h3>
           ) : null}
         </div>
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div className="flex items-center gap-1 opacity-70 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
           <button
             type="button"
             title="Insert reply into current note"
@@ -733,53 +1121,19 @@ function AssistantMessageArticle({ message, onInsertMessage, onCreateNoteFromMes
         </div>
       </div>
 
-      {summary ? <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-text-primary">{summary}</p> : null}
+      {summary ? (
+        <AssistantRichText
+          text={summary}
+          className="assistant-rich-copy mt-3 max-w-[64ch] text-[14px] leading-7 text-text-primary"
+        />
+      ) : null}
 
       {blocks.map((block) => {
         if (block.kind === 'code' || block.kind === 'sql') {
-          return <CodeBlock key={`${message.id}-${block.id || block.kind}`} block={block} />
+          return <CodeBlock key={`${message.id}-${block.id || block.kind}`} block={block} onCopy={onCopyBlock} />
         }
 
-        if (block.kind === 'bullets' || block.kind === 'checklist') {
-          return (
-            <section key={`${message.id}-${block.id || block.kind}`} className="mt-4">
-              {block.heading ? <p className="mb-2 text-[11px] text-text-muted">{block.heading}</p> : null}
-              <ul className="space-y-2 text-sm leading-6 text-text-primary">
-                {block.items.map((item, index) => (
-                  <li key={`${block.id}-item-${index}`} className="flex gap-2.5">
-                    <span className="mt-[11px] h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )
-        }
-
-        if (block.kind === 'warning') {
-          return (
-            <section
-              key={`${message.id}-${block.id || block.kind}`}
-              className="mt-4 border-l-2 border-amber-500/60 pl-3 text-sm leading-6 text-amber-700 dark:text-amber-300"
-            >
-              {block.heading ? <p className="mb-1 text-[11px]">{block.heading}</p> : null}
-              <p className="whitespace-pre-wrap">{block.text}</p>
-            </section>
-          )
-        }
-
-        return (
-          <section
-            key={`${message.id}-${block.id || block.kind}`}
-            className={[
-              'mt-4 text-sm leading-6 text-text-primary',
-              block.kind === 'result_explanation' ? 'border-l-2 border-accent/55 pl-3' : '',
-            ].join(' ')}
-          >
-            {block.heading ? <p className="mb-1 text-[11px] text-text-muted">{block.heading}</p> : null}
-            <p className="whitespace-pre-wrap">{block.text}</p>
-          </section>
-        )
+        return <AssistantTextBlock key={`${message.id}-${block.id || block.kind}`} block={block} onCopy={onCopyBlock} />
       })}
 
       <p className="mt-4 font-mono text-[10px] text-text-muted">{formatRelativeDate(message.created_at)}</p>
@@ -788,6 +1142,7 @@ function AssistantMessageArticle({ message, onInsertMessage, onCreateNoteFromMes
 }
 
 function AssistantFeed({
+  chatMode,
   assistantConfigured,
   loadingMessages,
   messages,
@@ -798,10 +1153,12 @@ function AssistantFeed({
   onSuggestion,
   onInsertMessage,
   onCreateNoteFromMessage,
+  onCopyBlock,
   endRef,
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="mx-auto w-full max-w-[720px]">
       {errorMessage ? (
         <div className="mb-4 border border-border-subtle bg-base/80 px-3 py-2 text-[12px] text-text-primary">
           {errorMessage}
@@ -820,25 +1177,33 @@ function AssistantFeed({
       {assistantConfigured && loadingMessages ? <p className="text-sm text-text-muted">Loading messages...</p> : null}
 
       {assistantConfigured && !loadingMessages && messages.length === 0 && !errorMessage ? (
-        <div className="border border-dashed border-border-subtle bg-base/70 px-5 py-5">
-          <p className="text-base font-medium text-text-primary">Ask anything.</p>
-          <p className="mt-2 text-sm leading-6 text-text-muted">Problem and current run are already attached.</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {suggestions.map((suggestion) => (
-              <button
-                key={`suggestion-${suggestion.intent}-${suggestion.label}`}
-                type="button"
-                onClick={() => onSuggestion(suggestion)}
-                className={pillButtonClass(false)}
-              >
-                {suggestion.label}
-              </button>
-            ))}
-          </div>
+        <div className="border border-dashed border-border-subtle bg-base/70 px-4 py-4">
+          <p className="text-[14px] font-medium text-text-primary">
+            {chatMode === CHAT_MODE ? 'Start a chat.' : 'Ask for a hint, review, or debug.'}
+          </p>
+          <p className="mt-1.5 text-[12px] leading-6 text-text-muted">
+            {chatMode === CHAT_MODE
+              ? 'Only attached chips and what you type will be sent.'
+              : 'The current problem and visible workspace state are attached when they matter.'}
+          </p>
+          {chatMode === ASSIST_MODE && suggestions.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={`suggestion-${suggestion.intent}-${suggestion.label}`}
+                  type="button"
+                  onClick={() => onSuggestion(suggestion)}
+                  className={pillButtonClass(false)}
+                >
+                  {suggestion.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         <AnimatePresence initial={false}>
           {messages.map((message) => (
             <Motion.div
@@ -852,13 +1217,14 @@ function AssistantFeed({
                 message={message}
                 onInsertMessage={onInsertMessage}
                 onCreateNoteFromMessage={onCreateNoteFromMessage}
+                onCopyBlock={onCopyBlock}
               />
             </Motion.div>
           ))}
         </AnimatePresence>
 
         {streaming ? (
-          <div className="border border-border-subtle bg-surface px-4 py-3">
+          <div className="max-w-[64ch] border border-border-subtle bg-surface px-3.5 py-3">
             <div className="flex items-center gap-2 text-sm text-text-primary">
               <LoaderCircle size={14} className="animate-spin text-accent" />
               {statusText || 'Thinking...'}
@@ -868,11 +1234,13 @@ function AssistantFeed({
 
         <div ref={endRef} />
       </div>
+      </div>
     </div>
   )
 }
 
 function AssistantComposerDock({
+  chatMode,
   onToggleContext,
   onContextHoverStart,
   onContextHoverEnd,
@@ -887,8 +1255,23 @@ function AssistantComposerDock({
   statusText,
   contextPopover,
   contextAnchorRef,
+  attachmentRail = null,
 }) {
-  const showCommandHint = composerValue.trim().length === 0 || composerValue.trim().startsWith('/')
+  const textareaRef = useRef(null)
+  const normalizedMode = normalizeChatMode(chatMode)
+  const showCommandHint =
+    normalizedMode === ASSIST_MODE &&
+    (composerValue.trim().length === 0 || composerValue.trim().startsWith('/'))
+
+  useEffect(() => {
+    const node = textareaRef.current
+    if (!node) {
+      return
+    }
+
+    node.style.height = '0px'
+    node.style.height = `${Math.min(Math.max(node.scrollHeight, 48), 156)}px`
+  }, [composerValue])
 
   return (
     <form
@@ -896,49 +1279,54 @@ function AssistantComposerDock({
         event.preventDefault()
         void onSend()
       }}
-      className="relative border-t border-border-subtle px-4 py-4"
+      className="relative border-t border-border-subtle px-3 py-2.5"
     >
-      {contextPopover}
+      {normalizedMode === ASSIST_MODE ? contextPopover : null}
 
-      <button
-        ref={contextAnchorRef}
-        type="button"
-        onClick={onToggleContext}
-        onMouseEnter={onContextHoverStart}
-        onMouseLeave={onContextHoverEnd}
-        onFocus={onContextHoverStart}
-        onBlur={onContextHoverEnd}
-        className="mb-3 inline-flex items-center gap-2 text-[12px] text-text-muted transition-colors hover:text-text-primary"
-      >
-        {contextOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        <span>{contextSummary}</span>
-      </button>
+      {normalizedMode === ASSIST_MODE ? (
+        <button
+          ref={contextAnchorRef}
+          type="button"
+          onClick={onToggleContext}
+          onMouseEnter={onContextHoverStart}
+          onMouseLeave={onContextHoverEnd}
+          onFocus={onContextHoverStart}
+          onBlur={onContextHoverEnd}
+          className="mb-2 inline-flex items-center gap-1.5 text-[11px] text-text-muted transition-colors hover:text-text-primary"
+        >
+          {contextOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          <span>{contextSummary}</span>
+        </button>
+      ) : null}
 
-      <textarea
-        value={composerValue}
-        onChange={(event) => onComposerChange(event.target.value)}
-        onKeyDown={onComposerKeyDown}
-        placeholder="Ask about the problem or your current run"
-        rows={2}
-        disabled={!assistantConfigured}
-        className="min-h-[88px] w-full resize-none border border-border-subtle bg-base px-3 py-3 text-sm leading-6 text-text-primary outline-none focus:border-accent disabled:opacity-60"
-      />
+      {normalizedMode === CHAT_MODE ? attachmentRail : null}
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          {showCommandHint ? (
-            <p className="font-mono text-[12px] text-text-muted">/hint /debug /review /optimize /solution</p>
-          ) : null}
-          {statusText && !streaming ? <p className="text-[12px] text-text-muted">{statusText}</p> : null}
+      {(statusText && !streaming) || showCommandHint ? (
+        <div className="mb-2 min-h-[14px] text-[10px] text-text-muted">
+          {statusText && !streaming ? <p>{statusText}</p> : null}
+          {!statusText && showCommandHint ? <p className="font-mono">/hint /debug /review /optimize /solution</p> : null}
         </div>
+      ) : null}
+
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={textareaRef}
+          value={composerValue}
+          onChange={(event) => onComposerChange(event.target.value)}
+          onKeyDown={onComposerKeyDown}
+          placeholder={normalizedMode === CHAT_MODE ? 'Message, code, SQL, or output' : 'Ask about the problem or current run'}
+          rows={1}
+          disabled={!assistantConfigured}
+          className="max-h-[156px] min-h-[48px] w-full flex-1 resize-none border border-border-subtle bg-base px-3 py-2.5 text-sm leading-6 text-text-primary outline-none focus:border-accent disabled:opacity-60"
+        />
 
         <button
           type="submit"
           disabled={streaming || !composerValue.trim() || !assistantConfigured}
-          className="inline-flex h-9 items-center gap-2 border border-accent bg-accent/10 px-3 text-sm text-accent transition-colors hover:bg-accent/14 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-10 shrink-0 items-center gap-1.5 border border-accent bg-accent/10 px-3 text-sm text-accent transition-colors hover:bg-accent/14 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Send size={14} />
-          Send
+          <span className="hidden sm:inline">Send</span>
           <ArrowRight size={14} />
         </button>
       </div>
@@ -958,13 +1346,20 @@ export function ProblemAssistantDrawer({
   onLaunchHandled,
   onInsertIntoCurrentNote,
   onCreateAiNote,
+  onOpenNote,
 }) {
   const reduceMotion = useReducedMotion()
   const [threads, setThreads] = useState([])
-  const [selectedThreadId, setSelectedThreadId] = useState(null)
+  const [chatMode, setChatMode] = useState(ASSIST_MODE)
+  const [selectedThreadIds, setSelectedThreadIds] = useState({
+    [ASSIST_MODE]: null,
+    [CHAT_MODE]: null,
+  })
   const [messages, setMessages] = useState([])
   const [composerValue, setComposerValue] = useState('')
-  const [attachments, setAttachments] = useState(() => buildBaseAttachments(workspaceContext, preferredProviderMode))
+  const [attachments, setAttachments] = useState(() =>
+    buildBaseAttachments(workspaceContext, preferredProviderMode, ASSIST_MODE),
+  )
   const [credentials, setCredentials] = useState([])
   const [loadingThreads, setLoadingThreads] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -977,56 +1372,133 @@ export function ProblemAssistantDrawer({
   const [contextOpen, setContextOpen] = useState(false)
   const [contextPinned, setContextPinned] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
+  const [notices, setNotices] = useState([])
   const endRef = useRef(null)
   const overflowAnchorRef = useRef(null)
   const overflowPanelRef = useRef(null)
   const contextAnchorRef = useRef(null)
   const contextPanelRef = useRef(null)
+  const noticeTimersRef = useRef(new Map())
+
+  const threadsByMode = useMemo(() => buildModeThreadMap(threads), [threads])
+  const modeThreads = useMemo(() => threadsByMode[chatMode] || [], [chatMode, threadsByMode])
+  const activeThreadId = selectedThreadIds[chatMode] ?? null
 
   const activeThread = useMemo(
-    () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
-    [selectedThreadId, threads],
+    () => modeThreads.find((thread) => thread.id === activeThreadId) ?? null,
+    [activeThreadId, modeThreads],
   )
   const hasUserCredential = credentials.some((item) => item.is_active)
   const assistantConfigured = isAssistantConfigured()
   const canUseAssistant = open && assistantConfigured && problem?.problemKey
+  const workspaceAttachmentState = useMemo(
+    () => ({
+      activeNoteId: workspaceContext?.activeNoteId ?? null,
+      activeNoteLabel: workspaceContext?.activeNoteLabel ?? '',
+      editorText: workspaceContext?.editorText ?? '',
+      selectedCaseIds: workspaceContext?.selectedCaseIds ?? [],
+      selectedFixtureId: workspaceContext?.selectedFixtureId ?? null,
+      selectedRunId: workspaceContext?.selectedRunId ?? null,
+      stdoutText: workspaceContext?.stdoutText ?? '',
+    }),
+    [
+      workspaceContext?.activeNoteId,
+      workspaceContext?.activeNoteLabel,
+      workspaceContext?.editorText,
+      workspaceContext?.selectedCaseIds,
+      workspaceContext?.selectedFixtureId,
+      workspaceContext?.selectedRunId,
+      workspaceContext?.stdoutText,
+    ],
+  )
   const providerMode = activeThread?.provider_mode || attachments.provider_mode || preferredProviderMode
   const contextSummary = useMemo(
-    () => buildContextSummary(attachments, workspaceContext, problem?.trackKey || 'dsa'),
-    [attachments, problem?.trackKey, workspaceContext],
+    () =>
+      chatMode === CHAT_MODE ? '' : buildContextSummary(attachments, workspaceContext, problem?.trackKey || 'dsa'),
+    [attachments, chatMode, problem?.trackKey, workspaceContext],
   )
   const emptyStateSuggestions = useMemo(
-    () => buildEmptyStateSuggestions(problem, workspaceContext),
-    [problem, workspaceContext],
+    () => (chatMode === CHAT_MODE ? [] : buildEmptyStateSuggestions(problem, workspaceContext)),
+    [chatMode, problem, workspaceContext],
   )
 
   useDismissableLayer(overflowOpen, [overflowAnchorRef, overflowPanelRef], () => setOverflowOpen(false))
-  useDismissableLayer(contextOpen, [contextAnchorRef, contextPanelRef], () => {
+  useDismissableLayer(chatMode === ASSIST_MODE && contextOpen, [contextAnchorRef, contextPanelRef], () => {
     setContextOpen(false)
     setContextPinned(false)
   })
 
   useEffect(() => {
-    setAttachments(
-      buildBaseAttachments(
-        {
-          activeNoteId: workspaceContext?.activeNoteId ?? null,
-          editorText: workspaceContext?.editorText ?? '',
-          selectedCaseIds: workspaceContext?.selectedCaseIds ?? [],
-          selectedFixtureId: workspaceContext?.selectedFixtureId ?? null,
-          selectedRunId: workspaceContext?.selectedRunId ?? null,
-        },
-        activeThread?.provider_mode || preferredProviderMode,
-      ),
-    )
+    const noticeTimers = noticeTimersRef.current
+    return () => {
+      noticeTimers.forEach((timer) => window.clearTimeout(timer))
+      noticeTimers.clear()
+    }
+  }, [])
+
+  const dismissNotice = (noticeId) => {
+    const timer = noticeTimersRef.current.get(noticeId)
+    if (timer) {
+      window.clearTimeout(timer)
+      noticeTimersRef.current.delete(noticeId)
+    }
+    setNotices((current) => current.filter((notice) => notice.id !== noticeId))
+  }
+
+  const pushNotice = ({ tone = 'info', message, actionLabel = '', noteId = null }) => {
+    const noticeId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setNotices((current) => [...current, { id: noticeId, tone, message, actionLabel, noteId }].slice(-4))
+    const timer = window.setTimeout(() => {
+      dismissNotice(noticeId)
+    }, 3200)
+    noticeTimersRef.current.set(noticeId, timer)
+  }
+
+  useEffect(() => {
+    setSelectedThreadIds((current) => {
+      const next = { ...current }
+      let changed = false
+
+      CHAT_MODE_OPTIONS.forEach((option) => {
+        const optionThreads = threadsByMode[option.value] || []
+        const currentId = next[option.value]
+        const fallbackId = optionThreads[0]?.id ?? null
+        if (currentId && optionThreads.some((thread) => thread.id === currentId)) {
+          return
+        }
+        if (currentId !== fallbackId) {
+          next[option.value] = fallbackId
+          changed = true
+        }
+      })
+
+      return changed ? next : current
+    })
+  }, [threadsByMode])
+
+  useEffect(() => {
+    const nextProviderMode = activeThread?.provider_mode || preferredProviderMode
+    setAttachments(() => {
+      const base = buildBaseAttachments(workspaceAttachmentState, nextProviderMode, chatMode)
+      return chatMode === CHAT_MODE ? syncChatAttachments(base, workspaceAttachmentState, nextProviderMode) : base
+    })
+    setContextOpen(false)
+    setContextPinned(false)
+  }, [activeThread?.id, activeThread?.provider_mode, chatMode, preferredProviderMode, problem?.problemKey, workspaceAttachmentState])
+
+  useEffect(() => {
+    const nextProviderMode = activeThread?.provider_mode || preferredProviderMode
+    setAttachments((current) => {
+      if (chatMode === CHAT_MODE) {
+        return syncChatAttachments(current, workspaceAttachmentState, nextProviderMode)
+      }
+      return buildBaseAttachments(workspaceAttachmentState, nextProviderMode, ASSIST_MODE)
+    })
   }, [
     activeThread?.provider_mode,
+    chatMode,
     preferredProviderMode,
-    workspaceContext?.activeNoteId,
-    workspaceContext?.editorText,
-    workspaceContext?.selectedCaseIds,
-    workspaceContext?.selectedFixtureId,
-    workspaceContext?.selectedRunId,
+    workspaceAttachmentState,
   ])
 
   useEffect(() => {
@@ -1045,7 +1517,6 @@ export function ProblemAssistantDrawer({
 
         setThreads(threadRows)
         setCredentials(credentialRows)
-        setSelectedThreadId((current) => current ?? threadRows[0]?.id ?? null)
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load assistant data.')
       } finally {
@@ -1057,7 +1528,7 @@ export function ProblemAssistantDrawer({
   }, [canUseAssistant, open, problem?.problemKey])
 
   useEffect(() => {
-    if (!selectedThreadId || !open) {
+    if (!activeThreadId || !open) {
       setMessages([])
       return
     }
@@ -1067,7 +1538,7 @@ export function ProblemAssistantDrawer({
       setErrorMessage('')
       setMessages([])
       try {
-        const rows = await assistantRequest(`/assistant/threads/${selectedThreadId}/messages`)
+        const rows = await assistantRequest(`/assistant/threads/${activeThreadId}/messages`)
         setMessages(rows)
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load assistant messages.')
@@ -1077,7 +1548,7 @@ export function ProblemAssistantDrawer({
     }
 
     void loadMessages()
-  }, [open, selectedThreadId])
+  }, [activeThreadId, open])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
@@ -1088,26 +1559,37 @@ export function ProblemAssistantDrawer({
       return
     }
 
+    const launchMode = normalizeChatMode(initialLaunch.chatMode)
+    const launchThreadId = selectedThreadIds[launchMode] ?? null
+    const launchThread = (threadsByMode[launchMode] || []).find((thread) => thread.id === launchThreadId) ?? null
+    setChatMode(launchMode)
+    setContextOpen(false)
+    setContextPinned(false)
     setAttachments((current) => ({
-      ...current,
-      ...initialLaunch.attachments,
-      provider_mode: activeThread?.provider_mode || current.provider_mode,
+      ...buildBaseAttachments(
+        workspaceAttachmentState,
+        launchThread?.provider_mode || preferredProviderMode,
+        launchMode,
+      ),
+      ...(launchMode === ASSIST_MODE ? initialLaunch.attachments : {}),
+      provider_mode: launchThread?.provider_mode || current.provider_mode,
     }))
     setComposerValue('')
     onLaunchHandled?.()
-  }, [activeThread?.provider_mode, initialLaunch, onLaunchHandled, open])
+  }, [initialLaunch, onLaunchHandled, open, preferredProviderMode, selectedThreadIds, threadsByMode, workspaceAttachmentState])
 
-  const createThread = async (provider = preferredProviderMode) => {
+  const createThread = async (provider = preferredProviderMode, nextMode = chatMode) => {
     const row = await assistantRequest('/assistant/threads', {
       method: 'POST',
       body: JSON.stringify({
         problem_key: problem.problemKey,
         track_key: problem.trackKey,
         provider_mode: provider,
+        chat_mode: nextMode,
       }),
     })
     setThreads((current) => [row, ...current])
-    setSelectedThreadId(row.id)
+    setSelectedThreadIds((current) => ({ ...current, [normalizeChatMode(nextMode)]: row.id }))
     setMessages([])
     setHistoryOpen(false)
     return row
@@ -1161,13 +1643,84 @@ export function ProblemAssistantDrawer({
     setOverflowOpen(false)
   }
 
+  const addChatAttachment = (key) => {
+    setAttachments((current) => {
+      const next = { ...current }
+
+      if (key === 'problem') {
+        next.include_problem = true
+      }
+
+      if (key === 'editor' && workspaceAttachmentState?.editorText?.trim()) {
+        next.include_editor = true
+      }
+
+      if (key === 'run' && workspaceAttachmentState?.selectedRunId) {
+        next.include_latest_run = true
+        next.selected_run_id = workspaceAttachmentState.selectedRunId
+        next.selected_case_ids = Array.isArray(workspaceAttachmentState?.selectedCaseIds) ? workspaceAttachmentState.selectedCaseIds : []
+        next.selected_fixture_id = workspaceAttachmentState?.selectedFixtureId || null
+      }
+
+      if (key === 'note' && workspaceAttachmentState?.activeNoteId) {
+        next.include_note = true
+        next.note_id = workspaceAttachmentState.activeNoteId
+      }
+
+      if (key === 'stdout' && workspaceAttachmentState?.stdoutText?.trim()) {
+        next.include_stdout = true
+        next.selected_run_id = workspaceAttachmentState?.selectedRunId || next.selected_run_id || null
+      }
+
+        return syncChatAttachments(next, workspaceAttachmentState, activeThread?.provider_mode || preferredProviderMode)
+      })
+  }
+
+  const removeChatAttachment = (key) => {
+    setAttachments((current) => {
+      const next = { ...current }
+
+      if (key === 'problem') {
+        next.include_problem = false
+      }
+
+      if (key === 'editor') {
+        next.include_editor = false
+      }
+
+      if (key === 'run') {
+        next.include_latest_run = false
+        next.selected_run_id = next.include_stdout ? workspaceAttachmentState?.selectedRunId || null : null
+        next.selected_case_ids = []
+        next.selected_fixture_id = null
+      }
+
+      if (key === 'note') {
+        next.include_note = false
+        next.note_id = null
+      }
+
+      if (key === 'stdout') {
+        next.include_stdout = false
+        next.selected_run_id = next.include_latest_run ? workspaceAttachmentState?.selectedRunId || null : null
+      }
+
+        return syncChatAttachments(next, workspaceAttachmentState, activeThread?.provider_mode || preferredProviderMode)
+      })
+  }
+
   const sendMessage = async (override = {}) => {
     const parsed = override.message || override.intent
       ? {
           intent: override.intent || 'general',
           message: clampMessage(override.message || composerValue),
         }
-      : parseSlashCommand(composerValue, problem?.trackKey || 'dsa')
+      : chatMode === CHAT_MODE
+        ? {
+            intent: 'general',
+            message: clampMessage(composerValue),
+          }
+        : parseSlashCommand(composerValue, problem?.trackKey || 'dsa')
 
     if (!parsed?.message || streaming || !assistantConfigured) {
       return
@@ -1178,7 +1731,7 @@ export function ProblemAssistantDrawer({
     setErrorMessage('')
 
     try {
-      const thread = activeThread || (await createThread(providerMode))
+      const thread = activeThread || (await createThread(providerMode, chatMode))
       const userDraft = {
         id: `temp-user-${Date.now()}`,
         role: 'user',
@@ -1224,7 +1777,10 @@ export function ProblemAssistantDrawer({
                   ? current.map((threadRow) => (threadRow.id === event.thread.id ? event.thread : threadRow))
                   : [event.thread, ...current]
               })
-              setSelectedThreadId(event.thread.id)
+              setSelectedThreadIds((current) => ({
+                ...current,
+                [normalizeChatMode(event.thread.chat_mode)]: event.thread.id,
+              }))
             }
           },
           onError: (event) => {
@@ -1255,7 +1811,33 @@ export function ProblemAssistantDrawer({
       summary: message?.content?.summary || '',
       blocks,
     }
-    await onInsertIntoCurrentNote?.(payload)
+    try {
+      const result = await onInsertIntoCurrentNote?.(payload)
+      if (!result) {
+        return
+      }
+      if (result.ok) {
+        pushNotice({
+          tone: 'success',
+          message:
+            result.action === 'created'
+              ? `Created ${result.noteLabel || 'AI note'}.`
+              : `Added to ${result.noteLabel || 'current note'}.`,
+          actionLabel: result.noteId ? 'Open note' : '',
+          noteId: result.noteId || null,
+        })
+        return
+      }
+      pushNotice({
+        tone: 'error',
+        message: result.error || 'Could not add this reply to a note.',
+      })
+    } catch (error) {
+      pushNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not add this reply to a note.',
+      })
+    }
   }
 
   const createNoteFromMessage = async (message, blocks) => {
@@ -1264,7 +1846,45 @@ export function ProblemAssistantDrawer({
       summary: message?.content?.summary || '',
       blocks,
     }
-    await onCreateAiNote?.(payload)
+    try {
+      const result = await onCreateAiNote?.(payload)
+      if (!result) {
+        return
+      }
+      if (result.ok) {
+        pushNotice({
+          tone: 'success',
+          message: `Created ${result.noteLabel || 'AI note'}.`,
+          actionLabel: result.noteId ? 'Open note' : '',
+          noteId: result.noteId || null,
+        })
+        return
+      }
+      pushNotice({
+        tone: 'error',
+        message: result.error || 'Could not create a note from this reply.',
+      })
+    } catch (error) {
+      pushNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not create a note from this reply.',
+      })
+    }
+  }
+
+  const copyBlock = async (value) => {
+    try {
+      await copyText(value)
+      pushNotice({
+        tone: 'success',
+        message: 'Copied to clipboard.',
+      })
+    } catch (error) {
+      pushNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not copy that block.',
+      })
+    }
   }
 
   const surface = (
@@ -1281,6 +1901,7 @@ export function ProblemAssistantDrawer({
       <AssistantHeader
         problem={problem}
         activeThread={activeThread}
+        chatMode={chatMode}
         hasUserCredential={hasUserCredential}
         providerMode={providerMode}
         overflowOpen={overflowOpen}
@@ -1292,13 +1913,25 @@ export function ProblemAssistantDrawer({
           setOverflowOpen(false)
         }}
         onClose={onClose}
-        onCreateThread={() => void createThread(providerMode)}
+        onCreateThread={() => void createThread(providerMode, chatMode)}
         onBeginRename={() => beginRename()}
+        onChangeChatMode={(nextMode) => {
+          setChatMode(normalizeChatMode(nextMode))
+          setHistoryOpen(false)
+          setOverflowOpen(false)
+          setContextOpen(false)
+          setContextPinned(false)
+          setMessages([])
+          setErrorMessage('')
+          setStatusText('')
+          setComposerValue('')
+        }}
         onSwitchProviderMode={(nextMode) => void switchProviderMode(nextMode)}
         mobile={mobile}
       />
 
       <AssistantFeed
+        chatMode={chatMode}
         assistantConfigured={assistantConfigured}
         loadingMessages={loadingMessages}
         messages={messages}
@@ -1309,21 +1942,26 @@ export function ProblemAssistantDrawer({
         onSuggestion={(suggestion) => void sendMessage(suggestion)}
         onInsertMessage={insertMessageBlocks}
         onCreateNoteFromMessage={createNoteFromMessage}
+        onCopyBlock={copyBlock}
         endRef={endRef}
       />
 
       <AssistantComposerDock
+        chatMode={chatMode}
         onToggleContext={() => {
+          if (chatMode === CHAT_MODE) {
+            return
+          }
           setContextOpen((current) => !current)
           setContextPinned((current) => !current)
         }}
         onContextHoverStart={() => {
-          if (!contextPinned) {
+          if (chatMode === ASSIST_MODE && !contextPinned) {
             setContextOpen(true)
           }
         }}
         onContextHoverEnd={() => {
-          if (!contextPinned) {
+          if (chatMode === ASSIST_MODE && !contextPinned) {
             setContextOpen(false)
           }
         }}
@@ -1342,9 +1980,18 @@ export function ProblemAssistantDrawer({
         streaming={streaming}
         statusText={statusText}
         contextAnchorRef={contextAnchorRef}
+        attachmentRail={
+          <ChatAttachmentRail
+            attachments={attachments}
+            workspaceContext={workspaceContext}
+            trackKey={problem?.trackKey || 'dsa'}
+            onAddAttachment={addChatAttachment}
+            onRemoveAttachment={removeChatAttachment}
+          />
+        }
         contextPopover={
           <AssistantContextPopover
-            open={contextOpen}
+            open={chatMode === ASSIST_MODE && contextOpen}
             popoverRef={contextPanelRef}
             problem={problem}
             workspaceContext={workspaceContext}
@@ -1363,11 +2010,23 @@ export function ProblemAssistantDrawer({
         }
       />
 
+      <AssistantNoticeStack
+        notices={notices}
+        onDismiss={dismissNotice}
+        onAction={(notice) => {
+          if (notice.noteId && onOpenNote) {
+            onOpenNote(notice.noteId)
+          }
+          dismissNotice(notice.id)
+        }}
+      />
+
       <AssistantHistoryModal
         open={historyOpen}
         mobile={mobile}
-        threads={threads}
-        selectedThreadId={selectedThreadId}
+        chatMode={chatMode}
+        threads={modeThreads}
+        selectedThreadId={activeThreadId}
         loading={loadingThreads}
         editingThreadId={editingThreadId}
         renameValue={renameValue}
@@ -1375,12 +2034,12 @@ export function ProblemAssistantDrawer({
         onBeginRename={beginRename}
         onSaveRename={saveThreadRename}
         onSelectThread={(threadId) => {
-          setSelectedThreadId(threadId)
+          setSelectedThreadIds((current) => ({ ...current, [chatMode]: threadId }))
           setHistoryOpen(false)
           setEditingThreadId(null)
           setRenameValue('')
         }}
-        onCreateThread={() => void createThread(providerMode)}
+        onCreateThread={() => void createThread(providerMode, chatMode)}
         onClose={() => {
           setHistoryOpen(false)
           setEditingThreadId(null)

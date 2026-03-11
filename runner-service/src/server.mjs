@@ -830,6 +830,7 @@ async function handleAssistantThreadCreate(req, res) {
       trackKey,
       title: body?.title,
       providerMode: body?.provider_mode,
+      chatMode: body?.chat_mode,
     })
     sendJson(req, res, 201, data)
   } catch (error) {

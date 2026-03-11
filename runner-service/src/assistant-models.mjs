@@ -50,8 +50,12 @@ function stringifyErrorPayload(payload) {
 }
 
 async function getVertexAccessToken() {
+  return getVertexAccessTokenWithOptions()
+}
+
+async function getVertexAccessTokenWithOptions({ allowDirectToken = true } = {}) {
   const directToken = String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim()
-  if (directToken) {
+  if (allowDirectToken && directToken) {
     return directToken
   }
 
@@ -74,6 +78,51 @@ async function getVertexAccessToken() {
   cachedAccessToken = accessToken
   cachedAccessTokenExpiry = now + 45 * 60_000
   return cachedAccessToken
+}
+
+function isVertexAuthFailure(response, payload) {
+  if (!response || response.status === 401 || response.status === 403) {
+    return true
+  }
+
+  const message = stringifyErrorPayload(payload)
+  return /unauthenticated|invalid authentication|access token|permission denied|credentials/i.test(message)
+}
+
+async function requestStructuredJsonOnce({
+  provider,
+  model,
+  apiKey,
+  systemInstruction,
+  userPrompt,
+  temperature,
+  maxOutputTokens,
+  allowDirectToken = true,
+}) {
+  const accessToken = provider === 'vertex' ? await getVertexAccessTokenWithOptions({ allowDirectToken }) : ''
+  const response = await fetch(buildModelUrl({ provider, model, apiKey }), {
+    method: 'POST',
+    headers: buildHeaders({ provider, apiKey, accessToken }),
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: userPrompt }],
+        },
+      ],
+      generationConfig: {
+        temperature,
+        maxOutputTokens,
+        responseMimeType: 'application/json',
+      },
+    }),
+  })
+
+  const payload = await response.json().catch(() => null)
+  return { response, payload }
 }
 
 function buildModelUrl({ provider, model, apiKey }) {
@@ -156,29 +205,34 @@ export async function generateStructuredJson({
   temperature = 0.35,
   maxOutputTokens = 2048,
 }) {
-  const accessToken = provider === 'vertex' ? await getVertexAccessToken() : ''
-  const response = await fetch(buildModelUrl({ provider, model, apiKey }), {
-    method: 'POST',
-    headers: buildHeaders({ provider, apiKey, accessToken }),
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: systemInstruction }],
-      },
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: userPrompt }],
-        },
-      ],
-      generationConfig: {
-        temperature,
-        maxOutputTokens,
-        responseMimeType: 'application/json',
-      },
-    }),
+  let { response, payload } = await requestStructuredJsonOnce({
+    provider,
+    model,
+    apiKey,
+    systemInstruction,
+    userPrompt,
+    temperature,
+    maxOutputTokens,
+    allowDirectToken: true,
   })
 
-  const payload = await response.json().catch(() => null)
+  if (
+    provider === 'vertex' &&
+    String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim() &&
+    isVertexAuthFailure(response, payload)
+  ) {
+    ;({ response, payload } = await requestStructuredJsonOnce({
+      provider,
+      model,
+      apiKey,
+      systemInstruction,
+      userPrompt,
+      temperature,
+      maxOutputTokens,
+      allowDirectToken: false,
+    }))
+  }
+
   if (!response.ok) {
     throw new Error(stringifyErrorPayload(payload) || `Model request failed (${response.status}).`)
   }

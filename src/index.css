@@ -28,6 +28,9 @@
   --ui-text-primary: #ededed;
   --ui-text-muted: #a4a4a4;
   --ui-accent: #14b8a6;
+  --ui-warning-surface: #17130a;
+  --ui-warning-border: #6a5a2b;
+  --ui-warning-text: #e2d3a1;
   --motion-fast: 140ms;
   --motion-normal: 220ms;
   --motion-reveal: 280ms;
@@ -44,6 +47,9 @@
   --ui-text-primary: #111111;
   --ui-text-muted: #575757;
   --ui-accent: #14b8a6;
+  --ui-warning-surface: #faf4e1;
+  --ui-warning-border: #cdb681;
+  --ui-warning-text: #5e4e24;
   color-scheme: light;
 }
 
@@ -237,6 +243,39 @@ textarea {
 
 .reading-copy p + p {
   margin-top: 0.85rem;
+}
+
+.assistant-rich-copy {
+  line-height: 1.68;
+}
+
+.assistant-rich-copy strong {
+  font-weight: 600;
+  color: var(--ui-text-primary);
+}
+
+.assistant-rich-copy em {
+  font-style: italic;
+}
+
+.assistant-rich-copy code {
+  border: 1px solid var(--ui-border-subtle);
+  background: var(--ui-elevated);
+  padding: 0 0.24rem;
+  font-family: "Geist Mono", "SFMono-Regular", monospace;
+  font-size: 0.88em;
+}
+
+.assistant-rich-copy a {
+  color: var(--ui-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+.assistant-warning-surface {
+  border-color: var(--ui-warning-border);
+  background: var(--ui-warning-surface);
+  color: var(--ui-warning-text);
 }
 
 .data-table-readable th {

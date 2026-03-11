@@ -12,6 +12,8 @@ const MAX_RESULT_ROWS = 20
 const MAX_THREAD_CONTEXT_MESSAGES = 10
 const PLATFORM_PROVIDER = 'platform'
 const USER_KEY_PROVIDER = 'user_key'
+const ASSIST_MODE = 'assist'
+const CHAT_MODE = 'chat'
 
 const VISIBLE_INTENTS = new Set([
   'explain',
@@ -57,6 +59,10 @@ function normalizeProviderMode(value) {
   return value === USER_KEY_PROVIDER ? USER_KEY_PROVIDER : PLATFORM_PROVIDER
 }
 
+function normalizeChatMode(value) {
+  return value === CHAT_MODE ? CHAT_MODE : ASSIST_MODE
+}
+
 function parseJsonObject(text) {
   try {
     const parsed = JSON.parse(text)
@@ -77,6 +83,113 @@ function normalizePromptSuggestions(value) {
     .slice(0, 5)
 }
 
+function normalizeTextualBlock({ kind, heading, text, copyValue, id }) {
+  return {
+    kind,
+    heading,
+    text,
+    copy_value: String(copyValue || text),
+    id,
+  }
+}
+
+function splitTextualBlockByCodeFence({ kind, heading, text, index }) {
+  const source = String(text || '').trim()
+  if (!source) {
+    return []
+  }
+
+  const fencePattern = /```([\w+-]*)\n?([\s\S]*?)```/g
+  const blocks = []
+  let lastIndex = 0
+  let partIndex = 0
+  let match
+
+  while ((match = fencePattern.exec(source)) !== null) {
+    const before = clampText(source.slice(lastIndex, match.index), 4000)
+    if (before) {
+      blocks.push(
+        normalizeTextualBlock({
+          kind,
+          heading: blocks.length === 0 ? heading : '',
+          text: before,
+          copyValue: before,
+          id: `block-${index}-${partIndex}`,
+        }),
+      )
+      partIndex += 1
+    }
+
+    const fenceLanguage = String(match[1] || '').trim().toLowerCase()
+    const code = String(match[2] || '').trim()
+    if (code) {
+      const codeKind = fenceLanguage === 'sql' ? 'sql' : 'code'
+      blocks.push({
+        kind: codeKind,
+        heading: '',
+        code,
+        language: fenceLanguage || (codeKind === 'sql' ? 'sql' : 'python'),
+        copy_value: code,
+        id: `block-${index}-${partIndex}`,
+      })
+      partIndex += 1
+    }
+
+    lastIndex = fencePattern.lastIndex
+  }
+
+  const after = clampText(source.slice(lastIndex), 4000)
+  if (after) {
+    blocks.push(
+      normalizeTextualBlock({
+        kind,
+        heading: blocks.length === 0 ? heading : '',
+        text: after,
+        copyValue: after,
+        id: `block-${index}-${partIndex}`,
+      }),
+    )
+  }
+
+  return blocks.length > 0
+    ? blocks
+    : [
+        normalizeTextualBlock({
+          kind,
+          heading,
+          text: source,
+          copyValue: source,
+          id: `block-${index}-0`,
+        }),
+      ]
+}
+
+function maybeConvertTextToBullets({ heading, text, index, kind }) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (kind !== 'text' || lines.length < 2 || !lines.every((line) => /^[-*]\s+/.test(line))) {
+    return null
+  }
+
+  const items = lines.map((line) => line.replace(/^[-*]\s+/, '')).filter(Boolean).slice(0, 12)
+  if (items.length === 0) {
+    return null
+  }
+
+  return [
+    {
+      kind: 'bullets',
+      heading,
+      items,
+      copy_value: items.map((item) => `- ${item}`).join('\n'),
+      id: `block-${index}-0`,
+    },
+  ]
+}
+
 function normalizeContentBlock(block, index) {
   const kind = String(block?.kind || '').trim().toLowerCase()
   const heading = clampText(block?.heading || '', 120)
@@ -84,17 +197,19 @@ function normalizeContentBlock(block, index) {
   if (kind === 'code' || kind === 'sql') {
     const code = String(block?.code || block?.text || '').trim()
     if (!code) {
-      return null
+      return []
     }
 
-    return {
-      kind,
-      heading,
-      code,
-      language: String(block?.language || (kind === 'sql' ? 'sql' : 'python')).trim() || 'text',
-      copy_value: String(block?.copy_value || code),
-      id: `block-${index}`,
-    }
+    return [
+      {
+        kind,
+        heading,
+        code,
+        language: String(block?.language || (kind === 'sql' ? 'sql' : 'python')).trim() || 'text',
+        copy_value: String(block?.copy_value || code),
+        id: `block-${index}`,
+      },
+    ]
   }
 
   if (kind === 'bullets' || kind === 'checklist') {
@@ -103,37 +218,47 @@ function normalizeContentBlock(block, index) {
       : []
 
     if (items.length === 0) {
-      return null
+      return []
     }
 
-    return {
-      kind,
-      heading,
-      items,
-      copy_value: String(block?.copy_value || items.map((item) => `- ${item}`).join('\n')),
-      id: `block-${index}`,
-    }
+    return [
+      {
+        kind,
+        heading,
+        items,
+        copy_value: String(block?.copy_value || items.map((item) => `- ${item}`).join('\n')),
+        id: `block-${index}`,
+      },
+    ]
   }
 
   const text = clampText(block?.text || block?.message || '', 4000)
   if (!text) {
-    return null
+    return []
   }
 
-  return {
-    kind: ['warning', 'result_explanation'].includes(kind) ? kind : 'text',
+  const normalizedKind = ['warning', 'result_explanation'].includes(kind) ? kind : 'text'
+  const bulletBlocks = maybeConvertTextToBullets({ heading, text, index, kind: normalizedKind })
+  if (bulletBlocks) {
+    return bulletBlocks
+  }
+
+  return splitTextualBlockByCodeFence({
+    kind: normalizedKind,
     heading,
     text,
-    copy_value: String(block?.copy_value || text),
-    id: `block-${index}`,
-  }
+    index,
+  }).map((item) => ({
+    ...item,
+    copy_value: String(item.copy_value || block?.copy_value || item.text || item.code || ''),
+  }))
 }
 
 function normalizeAssistantPayload(payload, fallbackMessage = '') {
   const title = clampText(payload?.title || 'Practicer AI', 140) || 'Practicer AI'
   const summary = clampText(payload?.summary || fallbackMessage || '', 1500)
   const blocks = Array.isArray(payload?.blocks)
-    ? payload.blocks.map((block, index) => normalizeContentBlock(block, index)).filter(Boolean)
+    ? payload.blocks.flatMap((block, index) => normalizeContentBlock(block, index)).filter(Boolean)
     : []
 
   if (blocks.length === 0) {
@@ -283,7 +408,7 @@ function getRecentMessagesForPrompt(messages) {
   }))
 }
 
-function buildAssistantSystemInstruction(trackKey) {
+function buildAssistantSystemInstruction(trackKey, chatMode = ASSIST_MODE) {
   return [
     `You are ${ASSISTANT_ROLE}, a problem-scoped assistant inside Practicer.`,
     'Return valid JSON only. Do not wrap the response in markdown code fences.',
@@ -291,12 +416,18 @@ function buildAssistantSystemInstruction(trackKey) {
     'blocks must be an array of objects with kind plus one of text/items/code.',
     'Allowed block kinds: text, bullets, code, sql, warning, checklist, result_explanation.',
     'Keep answers concise, structured, and directly useful inside an interview practice workspace.',
+    'For text-like blocks, use plain prose with optional inline markdown only. Do not place triple-backtick code fences inside text, warning, or result_explanation blocks.',
+    'If the content is code or SQL, always use a code or sql block instead of embedding code in prose.',
+    'If the content is a list, use bullets or checklist blocks instead of markdown bullet syntax inside a text block.',
     'Do not mention hidden tests or hidden fixtures.',
     trackKey === 'sql'
       ? 'When you provide query fixes, use PostgreSQL 14 SQL only.'
       : 'When you provide code, use Python only.',
     'Do not reveal a full solution unless the intent explicitly asks for reveal_full_solution.',
     'Prefer debugging the user’s current work over giving a replacement from scratch.',
+    chatMode === CHAT_MODE
+      ? 'This is chat mode. Use only the context that is explicitly attached for this turn. If problem, code, run, note, or stdout context is omitted, do not assume it exists.'
+      : 'This is assist mode. Use the attached workspace context when it is available.',
   ].join('\n')
 }
 
@@ -313,10 +444,10 @@ function buildAssistantUserPrompt({ intent, message, context }) {
   ].join('\n')
 }
 
-function buildFallbackAssistantPayload({ intent, message, context }) {
+function buildFallbackAssistantPayload({ intent, message, reason }) {
   const summary = intent === 'debug'
-    ? 'I could not complete the model turn, but the latest run context is attached and ready for another try.'
-    : 'I could not complete the model turn. Try again or reduce the attached context.'
+    ? 'The assistant could not complete this debug turn.'
+    : 'The assistant could not complete this turn.'
 
   return normalizeAssistantPayload({
     title: 'Assistant unavailable',
@@ -324,17 +455,38 @@ function buildFallbackAssistantPayload({ intent, message, context }) {
     blocks: [
       {
         kind: 'warning',
-        heading: 'Request kept in context',
-        text: `Intent: ${intent}\nMessage: ${clampText(message, 800)}`,
+        heading: 'What happened',
+        text: reason || 'The runner could not get a usable response from the configured model provider for this request.',
       },
       {
         kind: 'text',
-        heading: 'Attached context',
-        text: clampText(JSON.stringify(context, null, 2), 2400),
+        heading: 'Your request',
+        text: `Intent: ${intent}\nMessage: ${clampText(message, 280)}`,
       },
     ],
-    suggested_prompts: ['Try again', 'Use a smaller hint', 'Debug only the latest failure'],
+    suggested_prompts: ['Try again', 'Switch provider', 'Ask a shorter follow-up'],
   })
+}
+
+function humanizeAssistantFailure(error) {
+  const source = String(error instanceof Error ? error.message : error || '').trim()
+  if (!source) {
+    return 'The model provider did not return a usable response.'
+  }
+
+  if (/unauthenticated|invalid authentication|access token|unable to acquire a vertex ai access token|permission denied|credentials/i.test(source)) {
+    return 'The platform runner could not authenticate with Vertex AI. The deployed Vertex credential is likely missing or expired.'
+  }
+
+  if (/resource exhausted|quota|rate limit|429/i.test(source)) {
+    return 'The model provider is rate-limiting or out of quota for the current request.'
+  }
+
+  if (/model request failed \(404\)|not found/i.test(source)) {
+    return 'The configured AI model could not be found. The runner model configuration likely needs updating.'
+  }
+
+  return clampText(source, 320)
 }
 
 async function listPublicSqlFixtures(supabase, problemKey) {
@@ -350,6 +502,28 @@ async function listPublicSqlFixtures(supabase, problemKey) {
   }
 
   return data ?? []
+}
+
+async function buildProblemIdentityShell({ supabase, problemKey }) {
+  const { data, error } = await supabase
+    .from('v_study_problems')
+    .select('problem_key,title,track_key,tier,phase_name')
+    .eq('problem_key', problemKey)
+    .maybeSingle()
+
+  if (error) {
+    throw error
+  }
+
+  return {
+    identity: {
+      problem_key: data?.problem_key || problemKey,
+      title: String(data?.title || problemKey),
+      track_key: String(data?.track_key || '').trim() || 'dsa',
+      tier: toSafeNumber(data?.tier),
+      phase_name: String(data?.phase_name || '').trim(),
+    },
+  }
 }
 
 async function buildProblemContext({ supabase, problemKey, trackKey }) {
@@ -805,13 +979,14 @@ export async function listAssistantThreads({ supabase, userKey, problemKey }) {
   return data ?? []
 }
 
-export async function createAssistantThread({ supabase, userKey, problemKey, trackKey, title, providerMode }) {
+export async function createAssistantThread({ supabase, userKey, problemKey, trackKey, title, providerMode, chatMode }) {
   const payload = {
     user_key: userKey,
     problem_key: problemKey,
     track_key: trackKey === 'sql' ? 'sql' : 'dsa',
     title: clampText(title || DEFAULT_THREAD_TITLE, 80) || DEFAULT_THREAD_TITLE,
     provider_mode: normalizeProviderMode(providerMode),
+    chat_mode: normalizeChatMode(chatMode),
   }
 
   const { data, error } = await supabase
@@ -953,6 +1128,7 @@ export async function streamAssistantReply({
   onEvent,
 }) {
   const thread = await ensureThreadOwnership(supabase, threadId, userKey)
+  const chatMode = normalizeChatMode(thread.chat_mode)
   const providerMode = normalizeProviderMode(attachments?.provider_mode || thread.provider_mode)
 
   await enforceSpendLimits({ supabase, userKey, providerMode })
@@ -963,13 +1139,31 @@ export async function streamAssistantReply({
     throw new Error('Message is required.')
   }
 
-  const problemContext = await buildProblemContext({
-    supabase,
-    problemKey: thread.problem_key,
-    trackKey: thread.track_key,
-  })
+  const includeProblemContext = chatMode === ASSIST_MODE || Boolean(attachments?.include_problem)
+  const includeEditorContext = Boolean(attachments?.include_editor)
+  const includeRunContext =
+    chatMode === ASSIST_MODE
+      ? Boolean(attachments?.include_latest_run)
+      : Boolean(attachments?.include_latest_run || attachments?.include_stdout)
+  const includeNoteContext = Boolean(attachments?.include_note)
 
-  const runContext = attachments?.include_latest_run
+  const problemIdentity =
+    !includeProblemContext
+      ? await buildProblemIdentityShell({
+          supabase,
+          problemKey: thread.problem_key,
+        })
+      : null
+
+  const problemContext = includeProblemContext
+    ? await buildProblemContext({
+        supabase,
+        problemKey: thread.problem_key,
+        trackKey: thread.track_key,
+      })
+    : null
+
+  const runContext = includeRunContext
     ? await resolveRunContext({
         supabase,
         userKey,
@@ -982,7 +1176,7 @@ export async function streamAssistantReply({
       })
     : null
 
-  const noteContext = attachments?.include_note
+  const noteContext = includeNoteContext
     ? await resolveNoteContext({
         supabase,
         userKey,
@@ -1002,12 +1196,13 @@ export async function streamAssistantReply({
     problem: problemContext,
     workspace: {
       provider_badge: getProviderBadge(providerMode),
-      editor_text: attachments?.include_editor ? clampText(editorSnapshot, MAX_EDITOR_CHARS) : '',
+      editor_text: includeEditorContext ? clampText(editorSnapshot, MAX_EDITOR_CHARS) : '',
       latest_run: runContext,
       note: noteContext,
-      selected_fixture_id: attachments?.selected_fixture_id || null,
-      selected_run_id: attachments?.selected_run_id || null,
-      selected_case_ids: Array.isArray(attachments?.selected_case_ids) ? attachments.selected_case_ids : [],
+      selected_fixture_id: includeRunContext ? attachments?.selected_fixture_id || null : null,
+      selected_run_id: includeRunContext ? attachments?.selected_run_id || null : null,
+      selected_case_ids:
+        includeRunContext && Array.isArray(attachments?.selected_case_ids) ? attachments.selected_case_ids : [],
     },
     conversation: {
       rolling_summary: rollingSummary,
@@ -1018,6 +1213,7 @@ export async function streamAssistantReply({
   const normalizedIntent = normalizeIntent(intent)
   const userMessagePayload = {
     text: trimmedMessage,
+    chat_mode: chatMode,
     attachments: {
       include_problem: Boolean(attachments?.include_problem),
       include_editor: Boolean(attachments?.include_editor),
@@ -1061,8 +1257,8 @@ export async function streamAssistantReply({
       role: 'assistant',
       intent: normalizedIntent,
       status: 'streaming',
-      content: {
-        title: 'Thinking…',
+        content: {
+          title: 'Thinking…',
         summary: '',
         blocks: [],
         suggested_prompts: [],
@@ -1094,7 +1290,7 @@ export async function streamAssistantReply({
       provider: providerConfig.provider,
       model,
       apiKey: providerConfig.apiKey,
-      systemInstruction: buildAssistantSystemInstruction(thread.track_key),
+      systemInstruction: buildAssistantSystemInstruction(thread.track_key, chatMode),
       userPrompt: buildAssistantUserPrompt({
         intent: normalizedIntent,
         message: trimmedMessage,
@@ -1158,6 +1354,7 @@ export async function streamAssistantReply({
       .update({
         last_message_at: nextTimestamp,
         provider_mode: providerMode,
+        chat_mode: chatMode,
         updated_at: nextTimestamp,
       })
       .eq('id', threadId)
@@ -1175,7 +1372,7 @@ export async function streamAssistantReply({
         provider_mode: providerMode,
       },
       messages: refreshedMessages,
-      problemTitle: problemContext.identity.title,
+      problemTitle: problemContext?.identity?.title || problemIdentity?.identity?.title || thread.problem_key,
     })
 
     onEvent({
@@ -1187,6 +1384,7 @@ export async function streamAssistantReply({
       thread: {
         ...thread,
         provider_mode: providerMode,
+        chat_mode: chatMode,
         title: finalTitle,
         last_message_at: nextTimestamp,
       },
@@ -1195,7 +1393,7 @@ export async function streamAssistantReply({
     const fallbackPayload = buildFallbackAssistantPayload({
       intent: normalizedIntent,
       message: trimmedMessage,
-      context,
+      reason: humanizeAssistantFailure(error),
     })
 
     const { data: erroredMessage, error: updateError } = await supabase

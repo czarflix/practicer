@@ -3147,16 +3147,39 @@ export function ProblemDetailPage() {
     })
   }
 
+  const openNoteById = useCallback(
+    (noteId) => {
+      if (!noteId) {
+        return
+      }
+      setSelectedNoteId(noteId)
+      setLeftTab('notes')
+      setNotesView('mine')
+    },
+    [setNotesView],
+  )
+
   const insertAiPayloadIntoCurrentNote = useCallback(
     async (payload) => {
       const noteLabel = `AI Assistant — ${payload?.title || 'Chat'}`
       if (!activeNote) {
-        await createNoteVersion({
+        const created = await createNoteVersion({
           sortOrder: notes.length,
           label: noteLabel,
           seedContent: blocksToNoteDoc(payload),
         })
-        return
+        if (!created) {
+          return {
+            ok: false,
+            error: 'Could not create a note for this reply.',
+          }
+        }
+        return {
+          ok: true,
+          action: 'created',
+          noteId: created.id,
+          noteLabel: created.label,
+        }
       }
 
       const nextContent = appendBlocksToNoteDoc(activeNote.content || defaultNoteContent(), payload)
@@ -3166,19 +3189,36 @@ export function ProblemDetailPage() {
       queueNoteSave(activeNote.id, {
         content: nextContent,
       })
-      setSelectedNoteId(activeNote.id)
-      setLeftTab('notes')
+      openNoteById(activeNote.id)
+      return {
+        ok: true,
+        action: 'inserted',
+        noteId: activeNote.id,
+        noteLabel: activeNote.label,
+      }
     },
-    [activeNote, createNoteVersion, notes.length, queueNoteSave],
+    [activeNote, createNoteVersion, notes.length, openNoteById, queueNoteSave],
   )
 
   const createAiNoteFromPayload = useCallback(
     async (payload) => {
-      await createNoteVersion({
+      const created = await createNoteVersion({
         sortOrder: notes.length,
         label: `AI Assistant — ${payload?.title || 'Chat'}`,
         seedContent: blocksToNoteDoc(payload),
       })
+      if (!created) {
+        return {
+          ok: false,
+          error: 'Could not create a note for this reply.',
+        }
+      }
+      return {
+        ok: true,
+        action: 'created',
+        noteId: created.id,
+        noteLabel: created.label,
+      }
     },
     [createNoteVersion, notes.length],
   )
@@ -3853,6 +3893,13 @@ export function ProblemDetailPage() {
     }
     return runs.find((run) => getRunMode(run) === 'submit' && getRunSolutionId(run) === activeSolution?.id) ?? null
   }, [activeSolution?.id, isSqlTrack, runs, selectedResultRun])
+  const assistantStdoutText = useMemo(
+    () =>
+      extractUserStdout(
+        selectedResultRun?.stdout || selectedSqlPublicRun?.stdout || selectedSqlSubmitRun?.stdout || '',
+      ),
+    [selectedResultRun?.stdout, selectedSqlPublicRun?.stdout, selectedSqlSubmitRun?.stdout],
+  )
   const selectedSqlPublicCase = useMemo(() => {
     if (!isSqlTrack || !selectedSqlPublicRun) {
       return null
@@ -3957,6 +4004,7 @@ export function ProblemDetailPage() {
     activeNoteId: activeNote?.id ?? null,
     activeNoteLabel: activeNote?.label || '',
     activeNoteContent: activeNote?.content || defaultNoteContent(),
+    stdoutText: assistantStdoutText,
     selectedRunId:
       selectedResultRun?.id ||
       selectedSqlPublicRun?.id ||
@@ -3978,6 +4026,7 @@ export function ProblemDetailPage() {
 
   const launchAssistantWithPreset = (launch = {}) => {
     openAssistant({
+      chatMode: 'assist',
       message: launch.message || '',
       attachments: {
         include_problem: true,
@@ -4205,6 +4254,7 @@ export function ProblemDetailPage() {
                 onLaunchHandled={() => setAssistantLaunch(null)}
                 onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
                 onCreateAiNote={createAiNoteFromPayload}
+                onOpenNote={openNoteById}
               />
             ) : (
               <>
@@ -5551,6 +5601,7 @@ export function ProblemDetailPage() {
             onLaunchHandled={() => setAssistantLaunch(null)}
             onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
             onCreateAiNote={createAiNoteFromPayload}
+            onOpenNote={openNoteById}
           />
         ) : null}
 
