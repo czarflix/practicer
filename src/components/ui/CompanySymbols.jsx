@@ -260,7 +260,7 @@ function CompanySymbol({ name, preset, showTooltip = true }) {
 
   if (Icon) {
     return (
-      <span className="group relative inline-flex">
+      <span className="group relative z-0 inline-flex hover:z-20 focus-within:z-20">
         <SymbolFrame preset={preset}>
           <Icon size={preset.iconSize} />
         </SymbolFrame>
@@ -271,7 +271,7 @@ function CompanySymbol({ name, preset, showTooltip = true }) {
 
   if (imageSrc) {
     return (
-      <span className="group relative inline-flex">
+      <span className="group relative z-0 inline-flex hover:z-20 focus-within:z-20">
         <SymbolFrame preset={preset}>
           <img src={imageSrc} alt="" className="h-[72%] w-[72%] object-contain" />
         </SymbolFrame>
@@ -282,7 +282,7 @@ function CompanySymbol({ name, preset, showTooltip = true }) {
 
   if (GenericIcon) {
     return (
-      <span className="group relative inline-flex">
+      <span className="group relative z-0 inline-flex hover:z-20 focus-within:z-20">
         <SymbolFrame preset={preset}>
           <GenericIcon size={preset.iconSize} />
         </SymbolFrame>
@@ -292,7 +292,7 @@ function CompanySymbol({ name, preset, showTooltip = true }) {
   }
 
   return (
-    <span className="group relative inline-flex">
+    <span className="group relative z-0 inline-flex hover:z-20 focus-within:z-20">
       <SymbolFrame preset={preset} monogram>
         <span className="font-mono text-text-muted">{companyMonogram(name)}</span>
       </SymbolFrame>
@@ -319,12 +319,12 @@ export function CompanySymbols({ companies, max = 6, size = 'sm' }) {
   const hidden = names.slice(max)
 
   return (
-    <div className={['flex items-center', preset.gap].join(' ')}>
+    <div className={['isolate flex items-center', preset.gap].join(' ')}>
       {visible.map((name) => (
         <CompanySymbol key={name} name={name} preset={preset} />
       ))}
       {hidden.length > 0 ? (
-        <span className="group relative inline-flex">
+        <span className="group relative z-0 inline-flex hover:z-20 focus-within:z-20">
           <SymbolFrame preset={preset} monogram>
             <span className={['font-mono text-text-muted', preset.overflow].join(' ')}>+{hidden.length}</span>
           </SymbolFrame>

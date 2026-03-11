@@ -13,6 +13,10 @@
     "validate:sql-import": "node scripts/validate-sql-import.mjs",
     "import:sql": "node scripts/import-sql-payload.mjs",
     "import:sql-presentation": "node scripts/import-sql-presentation.mjs",
+    "build:problem-visual-manifest": "node scripts/build-problem-visual-manifest.mjs",
+    "generate:problem-visuals-local": "node scripts/sync-problem-visuals.mjs --mode=generate --local-only",
+    "validate:problem-visuals": "node scripts/validate-problem-visuals.mjs",
+    "sync:problem-visuals": "node scripts/sync-problem-visuals.mjs",
     "smoke:sql-runner": "node scripts/smoke-sql-runner.mjs",
     "validate:sql-pilot": "node scripts/validate-sql-pilot.mjs",
     "runner:dev": "npm --prefix runner-service run dev",
@@ -34,6 +38,7 @@
     "@tiptap/react": "^3.20.0",
     "@tiptap/starter-kit": "^3.20.0",
     "framer-motion": "^12.34.5",
+    "google-auth-library": "^10.6.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.0",
     "lowlight": "^3.3.0",
@@ -43,6 +48,7 @@
     "react-icons": "^5.6.0",
     "react-router-dom": "^7.13.1",
     "recharts": "^3.7.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.2.1"
   },
   "devDependencies": {

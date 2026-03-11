@@ -34,6 +34,7 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CodeEditor } from '../components/editors/CodeEditor'
 import { NoteEditor } from '../components/editors/NoteEditor'
+import { ProblemVisualGallery } from '../components/problems/ProblemVisualGallery'
 import { Modal } from '../components/ui/Modal'
 import { CompanySymbols } from '../components/ui/CompanySymbols'
 import { PlatformSymbol } from '../components/ui/PlatformSymbol'
@@ -53,6 +54,7 @@ import {
   sourcePlatformForProblem,
   toNumber,
 } from '../lib/problem-utils'
+import { extractProblemVisuals } from '../lib/problem-visuals'
 import { buttonTap, outputSwap, panelSwap } from '../lib/motion'
 import { missingSupabaseMessage, supabase } from '../lib/supabase'
 
@@ -3769,6 +3771,8 @@ export function ProblemDetailPage() {
     followUp: [],
     nodeShape: [],
   }
+  const dsaStatementVisuals = !isSqlTrack ? extractProblemVisuals(contentPresentation, 'statement') : []
+  const sqlSchemaVisuals = isSqlTrack ? extractProblemVisuals(sqlPresentation ?? contentPresentation, 'schema') : []
   const activePhaseName = String(data.row.phase_name || data.row.phaseName || '').trim()
   const sourcePlatformLabel = isSqlTrack
     ? sqlPresentation?.source?.platform || sourcePlatformForProblem(data.row)
@@ -3955,10 +3959,20 @@ export function ProblemDetailPage() {
                     <div className="mt-2">
                       <FormattedDescription text={sqlPresentation?.statement || contentPresentation.statement} />
                     </div>
+                    {!isSqlTrack && dsaStatementVisuals.length > 0 ? (
+                      <div className="mt-3">
+                        <ProblemVisualGallery presentation={contentPresentation} section="statement" />
+                      </div>
+                    ) : null}
                   </div>
 
                   {isSqlTrack ? (
                     <>
+                      {sqlSchemaVisuals.length > 0 ? (
+                        <div className="border border-border-subtle bg-base p-3">
+                          <ProblemVisualGallery presentation={sqlPresentation ?? contentPresentation} section="schema" />
+                        </div>
+                      ) : null}
                       <SqlSchemaSection schema={sqlPresentation?.schema} />
                       <SqlExamplesSection examples={examples} />
                       <SqlRequirementsSection requirements={sqlPresentation?.requirements} />

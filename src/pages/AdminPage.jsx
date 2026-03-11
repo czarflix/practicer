@@ -586,6 +586,9 @@ function ProblemsTab() {
     } catch (e) {
       const rawMessage = e instanceof Error ? e.message : 'Failed.'
       const nextMessage =
+        /problem_content/i.test(rawMessage) && /(row level security|permission denied|403|new row violates)/i.test(rawMessage)
+          ? 'Admin writes to problem content are blocked by RLS. Apply supabase/migrations/202603110002_problem_content_admin_manage.sql and ensure your app_users row has is_admin = true.'
+          :
         /sql_problem_specs|sql_problem_fixtures|problem_key|source_platform|source_problem_id|canonical_source_url/i.test(rawMessage)
           ? 'The cross-track SQL schema is not live yet. Finish coding, deploy the SQL runner, then run the pending migration before using SQL admin create/edit.'
           : rawMessage

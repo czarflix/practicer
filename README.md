@@ -29,6 +29,28 @@ npm run import:sql
 npm run import:sql-presentation
 ```
 
+## Problem Visuals
+
+```bash
+npm run build:problem-visual-manifest
+npm run validate:problem-visuals
+npm run generate:problem-visuals-local -- --problem-key=dsa-leetcode-11
+npm run sync:problem-visuals -- --mode=ingest --manifest=out/problem-visuals-manifest.json
+npm run sync:problem-visuals -- --mode=generate --problem-key=dsa-leetcode-11
+```
+
+`sync:problem-visuals` enforces `gemini-3-pro-image-preview` as the only allowed model and fails the row instead of falling back.
+
+Local-first review flow:
+
+```bash
+npm run generate:problem-visuals-local -- --limit=5
+npm run validate:problem-visuals -- --manifest=out/problem-visuals-generated/problem-visuals-local-manifest.json --require-files --allow-partial
+npm run sync:problem-visuals -- --mode=ingest --manifest=out/problem-visuals-generated/problem-visuals-local-manifest.json
+```
+
+If `GOOGLE_CLOUD_PROJECT` is unset, local generation falls back to your active `gcloud` project. If ADC is broken, it falls back to `gcloud auth print-access-token`.
+
 ## Runner Service
 
 Runner backend is in [runner-service](./runner-service/README.md).
