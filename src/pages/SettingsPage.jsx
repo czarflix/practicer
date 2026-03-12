@@ -15,7 +15,6 @@ import {
   User,
 } from 'lucide-react'
 
-import { CustomSelect } from '../components/ui/CustomSelect'
 import { useCurrentUser } from '../context/user-store'
 import { useNotificationPreferences } from '../hooks/useNotificationPreferences'
 import { useTargets } from '../hooks/useTargets'
@@ -678,19 +677,16 @@ function NotificationsSection({ userKey }) {
       transition={{ ...revealTransition, delay: 0.05 }}
       className="flex min-h-0 flex-col border border-border-subtle bg-surface"
     >
-      <CardHeader label="Preferences" title="Notifications" icon={Send} />
+      <CardHeader label="Notifications" icon={Send} />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="grid min-h-0 grid-cols-1 xl:grid-cols-2">
-          {/* ── SENDING ─────────────────────────────── */}
-          <div className="border-b border-border-subtle p-3 xl:border-b-0 xl:border-r">
+          <div className="border-b border-border-subtle p-2.5 xl:border-b-0 xl:border-r">
             <SectionLabel>Sending</SectionLabel>
-            <p className="mt-1 text-[11px] text-text-muted">Broadcast when you…</p>
-
-            <ul className="mt-3 space-y-2">
+            <ul className="mt-2 space-y-1.5">
               {SEND_TYPES.map((item) => (
-                <li key={item.type} className="flex items-center justify-between gap-3">
-                  <span className="text-xs text-text-primary">{item.label}</span>
+                <li key={item.type} className="flex min-h-7 items-center justify-between gap-3">
+                  <span className="text-[11px] text-text-primary">{item.label}</span>
                   <Toggle
                     enabled={preferences[item.type]?.send_enabled ?? true}
                     onToggle={(on) => void toggle(item.type, 'send', on)}
@@ -699,24 +695,18 @@ function NotificationsSection({ userKey }) {
               ))}
             </ul>
 
-            {/* Solve broadcast mode */}
-            <div className="mt-4 border-t border-border-subtle pt-3">
+            <div className="mt-3 border-t border-border-subtle pt-2.5">
               <SectionLabel>Solve Broadcasts</SectionLabel>
-
-              <div className="mt-2 space-y-2">
-                <div className="flex flex-col gap-1">
-                  <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Mode</span>
+              <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-end">
+                <div className="min-w-0 flex-1">
                   <BroadcastModeSelect
                     value={settings.solve_broadcast_mode}
                     onChange={(val) => void updateSettings({ solve_broadcast_mode: val })}
                   />
                 </div>
-
                 {settings.solve_broadcast_mode === 'milestone' ? (
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">
-                      Milestone every N solves
-                    </span>
+                  <label className="flex w-full flex-col gap-1 md:w-[148px]">
+                    <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Every N</span>
                     <input
                       type="number"
                       value={settings.milestone_threshold}
@@ -733,15 +723,12 @@ function NotificationsSection({ userKey }) {
             </div>
           </div>
 
-          {/* ── RECEIVING ────────────────────────────── */}
-          <div className="p-3">
+          <div className="p-2.5">
             <SectionLabel>Receiving</SectionLabel>
-            <p className="mt-1 text-[11px] text-text-muted">Notify me when someone…</p>
-
-            <ul className="mt-3 space-y-2">
+            <ul className="mt-2 space-y-1.5">
               {RECEIVE_COLLAB_TYPES.map((item) => (
-                <li key={item.type} className="flex items-center justify-between gap-3">
-                  <span className="text-xs text-text-primary">{item.label}</span>
+                <li key={item.type} className="flex min-h-7 items-center justify-between gap-3">
+                  <span className="text-[11px] text-text-primary">{item.label}</span>
                   <Toggle
                     enabled={preferences[item.type]?.receive_enabled ?? true}
                     onToggle={(on) => void toggle(item.type, 'receive', on)}
@@ -750,12 +737,12 @@ function NotificationsSection({ userKey }) {
               ))}
             </ul>
 
-            <div className="mt-4 border-t border-border-subtle pt-3">
+            <div className="mt-3 border-t border-border-subtle pt-2.5">
               <SectionLabel>System</SectionLabel>
-              <ul className="mt-3 space-y-2">
+              <ul className="mt-2 space-y-1.5">
                 {RECEIVE_SYSTEM_TYPES.map((item) => (
-                  <li key={item.type} className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-text-primary">{item.label}</span>
+                  <li key={item.type} className="flex min-h-7 items-center justify-between gap-3">
+                    <span className="text-[11px] text-text-primary">{item.label}</span>
                     <Toggle
                       enabled={preferences[item.type]?.receive_enabled ?? true}
                       onToggle={(on) => void toggle(item.type, 'receive', on)}
@@ -781,24 +768,20 @@ function DashboardSection({ userKey, activeTrackKey, onChangeTrack }) {
       transition={{ ...revealTransition, delay: 0.04 }}
       className="border border-border-subtle bg-surface"
     >
-      <CardHeader label="Preferences" title="Dashboard" icon={User} />
+      <CardHeader label="Dashboard" icon={User} />
 
-      <div className="p-2.5">
-        <div className="grid gap-2.5 md:grid-cols-2">
-          <div className="border border-border-subtle bg-base/60 p-2.5">
+      <div className="p-2">
+        <div className="grid gap-2 md:grid-cols-2">
+          <div className="border border-border-subtle bg-base/60 p-2">
             <SectionLabel>Preferred mode</SectionLabel>
-            <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
-              Open the app in your default track.
-            </p>
-
-            <div className="mt-2 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
+            <div className="mt-1.5 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
               {PREFERRED_MODE_OPTIONS.map((mode) => (
                 <button
                   key={`preferred-mode-${mode.value}`}
                   type="button"
                   onClick={() => void onChangeTrack(mode.value)}
                   className={[
-                    'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2.5 font-mono text-[10px] transition-colors',
+                    'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2 font-mono text-[10px] transition-colors',
                     activeTrackKey === mode.value
                       ? 'border-accent bg-accent/10 text-accent'
                       : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
@@ -810,20 +793,16 @@ function DashboardSection({ userKey, activeTrackKey, onChangeTrack }) {
             </div>
           </div>
 
-          <div className="border border-border-subtle bg-base/60 p-2.5">
+          <div className="border border-border-subtle bg-base/60 p-2">
             <SectionLabel>Comparison</SectionLabel>
-            <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
-              Choose whether the dashboard shows a peer comparison or only your own progress.
-            </p>
-
-            <div className="mt-2 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
+            <div className="mt-1.5 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
               {DASHBOARD_COMPARISON_MODES.map((mode) => (
                 <button
                   key={`dashboard-comparison-${mode.value}`}
                   type="button"
                   onClick={() => void updateSettings({ dashboard_comparison_mode: mode.value })}
                   className={[
-                    'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2.5 font-mono text-[10px] transition-colors',
+                    'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2 font-mono text-[10px] transition-colors',
                     settings.dashboard_comparison_mode === mode.value
                       ? 'border-accent bg-accent/10 text-accent'
                       : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
@@ -922,15 +901,12 @@ function AISection({ userKey }) {
       transition={{ ...revealTransition, delay: 0.045 }}
       className="border border-border-subtle bg-surface"
     >
-      <CardHeader label="Preferences" title="AI Assistant" icon={KeyRound} />
+      <CardHeader label="AI Assistant" icon={KeyRound} />
 
-      <div className="space-y-3 p-3">
-        <div className="border border-border-subtle bg-base/60 p-2.5">
+      <div className="space-y-2.5 p-2.5">
+        <div className="border border-border-subtle bg-base/60 p-2">
           <SectionLabel>Provider</SectionLabel>
-          <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
-            Choose the default provider for new assistant chats.
-          </p>
-          <div className="mt-2 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
+          <div className="mt-1.5 inline-flex w-full items-center gap-0.5 border border-border-subtle bg-base p-0.5">
             {[
               { value: 'platform', label: 'Practicer AI' },
               { value: 'user_key', label: 'Your Gemini Key' },
@@ -941,7 +917,7 @@ function AISection({ userKey }) {
                 disabled={mode.value === 'user_key' && !activeCredential}
                 onClick={() => void updateSettings({ preferred_ai_provider_mode: mode.value })}
                 className={[
-                  'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2.5 font-mono text-[10px] transition-colors disabled:opacity-40',
+                  'inline-flex h-7 min-w-0 flex-1 items-center justify-center border px-2 font-mono text-[10px] transition-colors disabled:opacity-40',
                   settings.preferred_ai_provider_mode === mode.value
                     ? 'border-accent bg-accent/10 text-accent'
                     : 'border-transparent text-text-muted hover:border-border-subtle hover:text-text-primary',
@@ -954,19 +930,15 @@ function AISection({ userKey }) {
         </div>
 
         {!isAssistantConfigured() ? (
-          <div className="border border-border-subtle bg-base px-3 py-2 text-[11px] text-text-muted">
+          <div className="border border-border-subtle bg-base px-2.5 py-2 text-[11px] text-text-muted">
             Runner service is not configured. Set `VITE_RUNNER_API_URL` to enable the AI assistant.
           </div>
         ) : null}
 
-        <div className="border border-border-subtle bg-base/60 p-2.5">
+        <div className="border border-border-subtle bg-base/60 p-2">
           <SectionLabel>Bring Your Own Key</SectionLabel>
-          <p className="mt-0.5 text-[10px] leading-5 text-text-muted">
-            Save one Gemini API key for your own assistant usage. The key is validated by the backend and stored encrypted server-side.
-          </p>
-
           {activeCredential ? (
-            <div className="mt-2 flex items-center justify-between gap-2 border border-border-subtle bg-base px-3 py-2">
+            <div className="mt-1.5 flex items-center justify-between gap-2 border border-border-subtle bg-base px-3 py-2">
               <div className="min-w-0">
                 <p className="truncate text-sm text-text-primary">{activeCredential.label}</p>
                 <p className="mt-1 font-mono text-[11px] text-text-muted">
@@ -984,7 +956,7 @@ function AISection({ userKey }) {
               </button>
             </div>
           ) : (
-            <div className="mt-2 space-y-2">
+            <div className="mt-1.5 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-end">
               <label className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Label</span>
                 <input
@@ -1008,7 +980,7 @@ function AISection({ userKey }) {
                 type="button"
                 onClick={() => void saveCredential()}
                 disabled={busy || !isAssistantConfigured()}
-                className="inline-flex h-8 items-center gap-1 border border-accent bg-accent/10 px-3 text-xs text-accent disabled:opacity-60"
+                className="inline-flex h-8 items-center justify-center gap-1 border border-accent bg-accent/10 px-3 text-xs text-accent disabled:opacity-60"
               >
                 {busy ? <><Send size={12} /> Validating…</> : <><Plus size={12} /> Save Key</>}
               </button>
@@ -1030,7 +1002,6 @@ export function SettingsPage() {
   return (
     <section className="h-[100dvh] w-full overflow-hidden p-3 md:p-4">
       <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-        {/* Header */}
         <Motion.header
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1038,27 +1009,27 @@ export function SettingsPage() {
           className="border border-border-subtle bg-surface px-3 py-2"
         >
           <SectionLabel>Settings</SectionLabel>
-          <p className="mt-1 text-sm text-text-primary">
-            Profile, study targets, and notification preferences
-          </p>
+          <p className="mt-1 text-sm text-text-primary">Profile, planning, notifications, and assistant preferences</p>
         </Motion.header>
 
         <div className="grid min-h-0 grid-cols-1 gap-3 xl:grid-cols-[0.35fr_0.65fr]">
-          {/* Left: Profile + Targets */}
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
             <ProfileSection userKey={userKey} session={session} />
             <TargetsSection userKey={userKey} />
           </div>
 
-          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden">
             <DashboardSection
               userKey={userKey}
               activeTrackKey={activeTrackKey}
               onChangeTrack={setActiveTrackKey}
             />
-            <div className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
-              <AISection userKey={userKey} />
-              <NotificationsSection userKey={userKey} />
+
+            <div className="min-h-0 overflow-y-auto pr-1">
+              <div className="grid min-h-full content-start gap-3">
+                <AISection userKey={userKey} />
+                <NotificationsSection userKey={userKey} />
+              </div>
             </div>
           </div>
         </div>

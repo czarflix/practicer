@@ -12,7 +12,6 @@ const MAX_RESULT_ROWS = 20
 const MAX_THREAD_CONTEXT_MESSAGES = 10
 const PLATFORM_PROVIDER = 'platform'
 const USER_KEY_PROVIDER = 'user_key'
-const ASSIST_MODE = 'assist'
 const CHAT_MODE = 'chat'
 
 const VISIBLE_INTENTS = new Set([
@@ -57,10 +56,6 @@ function normalizeIntent(value) {
 
 function normalizeProviderMode(value) {
   return value === USER_KEY_PROVIDER ? USER_KEY_PROVIDER : PLATFORM_PROVIDER
-}
-
-function normalizeChatMode(value) {
-  return value === CHAT_MODE ? CHAT_MODE : ASSIST_MODE
 }
 
 function parseJsonObject(text) {
@@ -408,7 +403,7 @@ function getRecentMessagesForPrompt(messages) {
   }))
 }
 
-function buildAssistantSystemInstruction(trackKey, chatMode = ASSIST_MODE) {
+function buildAssistantSystemInstruction(trackKey) {
   return [
     `You are ${ASSISTANT_ROLE}, a problem-scoped assistant inside Practicer.`,
     'Return valid JSON only. Do not wrap the response in markdown code fences.',
@@ -425,9 +420,7 @@ function buildAssistantSystemInstruction(trackKey, chatMode = ASSIST_MODE) {
       : 'When you provide code, use Python only.',
     'Do not reveal a full solution unless the intent explicitly asks for reveal_full_solution.',
     'Prefer debugging the user’s current work over giving a replacement from scratch.',
-    chatMode === CHAT_MODE
-      ? 'This is chat mode. Use only the context that is explicitly attached for this turn. If problem, code, run, note, or stdout context is omitted, do not assume it exists.'
-      : 'This is assist mode. Use the attached workspace context when it is available.',
+    'Use only the context that is explicitly attached for this turn. If problem, code, run, note, or stdout context is omitted, do not assume it exists.',
   ].join('\n')
 }
 
@@ -444,10 +437,14 @@ function buildAssistantUserPrompt({ intent, message, context }) {
   ].join('\n')
 }
 
-function buildFallbackAssistantPayload({ intent, message, reason }) {
+function buildFallbackAssistantPayload({ intent, reason }) {
   const summary = intent === 'debug'
     ? 'The assistant could not complete this debug turn.'
     : 'The assistant could not complete this turn.'
+  const detail = clampText(
+    reason || 'The configured model provider did not return a usable answer for this request.',
+    220,
+  )
 
   return normalizeAssistantPayload({
     title: 'Assistant unavailable',
@@ -455,16 +452,10 @@ function buildFallbackAssistantPayload({ intent, message, reason }) {
     blocks: [
       {
         kind: 'warning',
-        heading: 'What happened',
-        text: reason || 'The runner could not get a usable response from the configured model provider for this request.',
-      },
-      {
-        kind: 'text',
-        heading: 'Your request',
-        text: `Intent: ${intent}\nMessage: ${clampText(message, 280)}`,
+        text: detail,
       },
     ],
-    suggested_prompts: ['Try again', 'Switch provider', 'Ask a shorter follow-up'],
+    suggested_prompts: ['Try again', 'Ask a shorter follow-up'],
   })
 }
 
@@ -744,11 +735,12 @@ function determineBackgroundModel() {
 
 async function resolveProviderConfig({ supabase, userKey, providerMode }) {
   if (providerMode !== USER_KEY_PROVIDER) {
+    const platformApiKey = String(runnerConfig.googleApiKey || '').trim()
     return {
-      provider: 'vertex',
+      provider: platformApiKey ? 'gemini_api' : 'vertex',
       mode: PLATFORM_PROVIDER,
       badge: getProviderBadge(PLATFORM_PROVIDER),
-      apiKey: '',
+      apiKey: platformApiKey,
     }
   }
 
@@ -976,17 +968,49 @@ export async function listAssistantThreads({ supabase, userKey, problemKey }) {
     throw error
   }
 
-  return data ?? []
+  const threads = data ?? []
+  const nullTimestampThreadIds = threads
+    .filter((thread) => !thread.last_message_at)
+    .map((thread) => thread.id)
+
+  if (nullTimestampThreadIds.length === 0) {
+    return threads
+  }
+
+  const { data: messageRows, error: messageError } = await supabase
+    .from('assistant_messages')
+    .select('thread_id,created_at')
+    .eq('user_key', userKey)
+    .in('thread_id', nullTimestampThreadIds)
+    .order('created_at', { ascending: false })
+
+  if (messageError) {
+    throw messageError
+  }
+
+  const latestMessageAtByThreadId = new Map()
+  for (const row of messageRows ?? []) {
+    if (!latestMessageAtByThreadId.has(row.thread_id)) {
+      latestMessageAtByThreadId.set(row.thread_id, row.created_at)
+    }
+  }
+
+  return threads
+    .filter((thread) => thread.last_message_at || latestMessageAtByThreadId.has(thread.id))
+    .map((thread) => ({
+      ...thread,
+      last_message_at: thread.last_message_at || latestMessageAtByThreadId.get(thread.id) || null,
+    }))
 }
 
-export async function createAssistantThread({ supabase, userKey, problemKey, trackKey, title, providerMode, chatMode }) {
+export async function createAssistantThread({ supabase, userKey, problemKey, trackKey, title, providerMode }) {
   const payload = {
     user_key: userKey,
     problem_key: problemKey,
     track_key: trackKey === 'sql' ? 'sql' : 'dsa',
     title: clampText(title || DEFAULT_THREAD_TITLE, 80) || DEFAULT_THREAD_TITLE,
     provider_mode: normalizeProviderMode(providerMode),
-    chat_mode: normalizeChatMode(chatMode),
+    chat_mode: CHAT_MODE,
   }
 
   const { data, error } = await supabase
@@ -1128,7 +1152,7 @@ export async function streamAssistantReply({
   onEvent,
 }) {
   const thread = await ensureThreadOwnership(supabase, threadId, userKey)
-  const chatMode = normalizeChatMode(thread.chat_mode)
+  const chatMode = CHAT_MODE
   const providerMode = normalizeProviderMode(attachments?.provider_mode || thread.provider_mode)
 
   await enforceSpendLimits({ supabase, userKey, providerMode })
@@ -1139,21 +1163,12 @@ export async function streamAssistantReply({
     throw new Error('Message is required.')
   }
 
-  const includeProblemContext = chatMode === ASSIST_MODE || Boolean(attachments?.include_problem)
+  const includeProblemContext = Boolean(attachments?.include_problem)
   const includeEditorContext = Boolean(attachments?.include_editor)
-  const includeRunContext =
-    chatMode === ASSIST_MODE
-      ? Boolean(attachments?.include_latest_run)
-      : Boolean(attachments?.include_latest_run || attachments?.include_stdout)
+  const includeRunContext = Boolean(attachments?.include_latest_run || attachments?.include_stdout)
   const includeNoteContext = Boolean(attachments?.include_note)
 
-  const problemIdentity =
-    !includeProblemContext
-      ? await buildProblemIdentityShell({
-          supabase,
-          problemKey: thread.problem_key,
-        })
-      : null
+  const problemIdentity = null
 
   const problemContext = includeProblemContext
     ? await buildProblemContext({
@@ -1248,35 +1263,8 @@ export async function streamAssistantReply({
     throw userInsertError
   }
 
-  const { data: placeholderRow, error: placeholderError } = await supabase
-    .from('assistant_messages')
-    .insert({
-      thread_id: threadId,
-      user_key: userKey,
-      problem_key: thread.problem_key,
-      role: 'assistant',
-      intent: normalizedIntent,
-      status: 'streaming',
-        content: {
-          title: 'Thinking…',
-        summary: '',
-        blocks: [],
-        suggested_prompts: [],
-        usage: null,
-      },
-      context_snapshot: context,
-      source_run_id: attachments?.selected_run_id || runContext?.id || null,
-      source_note_id: attachments?.note_id || noteContext?.id || null,
-    })
-    .select('*')
-    .single()
-
-  if (placeholderError) {
-    throw placeholderError
-  }
-
   const startedAt = Date.now()
-  onEvent({ type: 'status', stage: 'model', message: 'Calling model…', message_id: placeholderRow.id })
+  onEvent({ type: 'status', stage: 'model', message: 'Calling model…' })
 
   try {
     const providerConfig = await resolveProviderConfig({ supabase, userKey, providerMode })
@@ -1290,7 +1278,7 @@ export async function streamAssistantReply({
       provider: providerConfig.provider,
       model,
       apiKey: providerConfig.apiKey,
-      systemInstruction: buildAssistantSystemInstruction(thread.track_key, chatMode),
+      systemInstruction: buildAssistantSystemInstruction(thread.track_key),
       userPrompt: buildAssistantUserPrompt({
         intent: normalizedIntent,
         message: trimmedMessage,
@@ -1327,11 +1315,19 @@ export async function streamAssistantReply({
       latency_ms: Date.now() - startedAt,
     }
 
-    const { data: completedMessage, error: updateError } = await supabase
+    const { data: completedMessage, error: insertError } = await supabase
       .from('assistant_messages')
-      .update({
+      .insert({
+        thread_id: threadId,
+        user_key: userKey,
+        problem_key: thread.problem_key,
+        role: 'assistant',
+        intent: normalizedIntent,
         status: 'completed',
         content: normalizedPayload,
+        context_snapshot: context,
+        source_run_id: attachments?.selected_run_id || runContext?.id || null,
+        source_note_id: attachments?.note_id || noteContext?.id || null,
         model,
         provider: providerConfig.provider,
         prompt_tokens: response.usage.promptTokens,
@@ -1339,13 +1335,11 @@ export async function streamAssistantReply({
         estimated_cost_usd: response.estimatedCostUsd,
         latency_ms: Date.now() - startedAt,
       })
-      .eq('id', placeholderRow.id)
-      .eq('user_key', userKey)
       .select('*')
       .single()
 
-    if (updateError) {
-      throw updateError
+    if (insertError) {
+      throw insertError
     }
 
     const nextTimestamp = nowIso()
@@ -1392,32 +1386,58 @@ export async function streamAssistantReply({
   } catch (error) {
     const fallbackPayload = buildFallbackAssistantPayload({
       intent: normalizedIntent,
-      message: trimmedMessage,
       reason: humanizeAssistantFailure(error),
     })
 
-    const { data: erroredMessage, error: updateError } = await supabase
+    const { data: erroredMessage, error: insertError } = await supabase
       .from('assistant_messages')
-      .update({
+      .insert({
+        thread_id: threadId,
+        user_key: userKey,
+        problem_key: thread.problem_key,
+        role: 'assistant',
+        intent: normalizedIntent,
         status: 'error',
         content: fallbackPayload,
+        context_snapshot: context,
+        source_run_id: attachments?.selected_run_id || runContext?.id || null,
+        source_note_id: attachments?.note_id || noteContext?.id || null,
         provider: providerMode === USER_KEY_PROVIDER ? 'gemini_api' : 'vertex',
         latency_ms: Date.now() - startedAt,
       })
-      .eq('id', placeholderRow.id)
-      .eq('user_key', userKey)
       .select('*')
       .single()
 
-    if (updateError) {
-      throw updateError
+    if (insertError) {
+      throw insertError
+    }
+
+    const nextTimestamp = nowIso()
+    const { error: threadUpdateError } = await supabase
+      .from('assistant_threads')
+      .update({
+        last_message_at: nextTimestamp,
+        provider_mode: providerMode,
+        chat_mode: chatMode,
+        updated_at: nextTimestamp,
+      })
+      .eq('id', threadId)
+      .eq('user_key', userKey)
+
+    if (threadUpdateError) {
+      throw threadUpdateError
     }
 
     onEvent({
       type: 'message',
       message: erroredMessage,
       error: error instanceof Error ? error.message : 'Assistant request failed.',
-      thread,
+      thread: {
+        ...thread,
+        provider_mode: providerMode,
+        chat_mode: chatMode,
+        last_message_at: nextTimestamp,
+      },
     })
   }
 }

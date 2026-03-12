@@ -17,6 +17,7 @@ import { ProblemsPage } from '../../pages/ProblemsPage'
 import { SettingsPage } from '../../pages/SettingsPage'
 import { AdminPage } from '../../pages/AdminPage'
 import { useSolveDestination } from '../../hooks/useSolveDestination'
+import { FloatingAssistantWindow } from '../assistant/FloatingAssistantWindow'
 import { Sidebar } from './Sidebar'
 
 function StudioRedirect() {
@@ -97,6 +98,7 @@ export function AppLayout() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
+      <FloatingAssistantWindow />
     </div>
   )
 }

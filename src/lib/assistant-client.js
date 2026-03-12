@@ -23,6 +23,18 @@ function normalizeAssistantNetworkError(error) {
   return message
 }
 
+function parseJsonSafely(text) {
+  if (!text) {
+    return null
+  }
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 async function getAccessToken() {
   if (!supabase) {
     throw new Error('Supabase is required for the AI assistant.')
@@ -54,6 +66,7 @@ export async function assistantRequest(path, options = {}) {
   try {
     response = await fetch(`${assistantRunnerBaseUrl}${path}`, {
       ...options,
+      signal: options.signal,
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
@@ -66,16 +79,16 @@ export async function assistantRequest(path, options = {}) {
   }
 
   const text = await response.text()
-  const payload = text ? JSON.parse(text) : null
+  const payload = parseJsonSafely(text)
 
   if (!response.ok) {
-    throw new Error(payload?.error || `Assistant request failed (${response.status}).`)
+    throw new Error(payload?.error || text || `Assistant request failed (${response.status}).`)
   }
 
   return payload
 }
 
-export async function assistantStream(path, body, handlers) {
+export async function assistantStream(path, body, handlers, options = {}) {
   if (!assistantRunnerBaseUrl) {
     throw new Error('Runner service is not configured. Set VITE_RUNNER_API_URL.')
   }
@@ -85,6 +98,7 @@ export async function assistantStream(path, body, handlers) {
   try {
     response = await fetch(`${assistantRunnerBaseUrl}${path}`, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${accessToken}`,
@@ -98,18 +112,14 @@ export async function assistantStream(path, body, handlers) {
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => '')
-    let payload = null
-    try {
-      payload = text ? JSON.parse(text) : null
-    } catch {
-      payload = null
-    }
-    throw new Error(payload?.error || `Assistant stream failed (${response.status}).`)
+    const payload = parseJsonSafely(text)
+    throw new Error(payload?.error || text || `Assistant stream failed (${response.status}).`)
   }
 
   const decoder = new TextDecoder()
   const reader = response.body.getReader()
   let buffer = ''
+  let streamError = null
 
   while (true) {
     const { done, value } = await reader.read()
@@ -123,18 +133,33 @@ export async function assistantStream(path, body, handlers) {
       const line = buffer.slice(0, newlineIndex).trim()
       buffer = buffer.slice(newlineIndex + 1)
       if (line) {
-        const event = JSON.parse(line)
+        const event = parseJsonSafely(line)
+        if (!event) {
+          newlineIndex = buffer.indexOf('\n')
+          continue
+        }
         if (event.type === 'message') {
           handlers?.onMessage?.(event)
         } else if (event.type === 'status') {
           handlers?.onStatus?.(event)
         } else if (event.type === 'error') {
           handlers?.onError?.(event)
+          streamError = event
+          await reader.cancel().catch(() => {})
+          break
         } else if (event.type === 'done') {
           handlers?.onDone?.(event)
         }
       }
       newlineIndex = buffer.indexOf('\n')
     }
+
+    if (streamError) {
+      break
+    }
+  }
+
+  if (streamError) {
+    throw new Error(streamError.error || 'Assistant stream failed.')
   }
 }

@@ -34,12 +34,12 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CodeEditor } from '../components/editors/CodeEditor'
 import { NoteEditor } from '../components/editors/NoteEditor'
-import { ProblemAssistantDrawer } from '../components/assistant/ProblemAssistantDrawer'
 import { ProblemVisualGallery } from '../components/problems/ProblemVisualGallery'
 import { Modal } from '../components/ui/Modal'
 import { CompanySymbols } from '../components/ui/CompanySymbols'
 import { PlatformSymbol } from '../components/ui/PlatformSymbol'
 import { CustomSelect } from '../components/ui/CustomSelect'
+import { useAssistantWindow } from '../context/AssistantWindowContext'
 import { useCurrentUser } from '../context/user-store'
 import { useComments } from '../hooks/useComments'
 import { useProblemBundle } from '../hooks/useProblemBundle'
@@ -2441,6 +2441,7 @@ export function ProblemDetailPage() {
   const queryClient = useQueryClient()
   const { userKey } = useCurrentUser()
   const userSettingsState = useUserSettings(userKey)
+  const updateUserSettings = userSettingsState.update
   const navigate = useNavigate()
   const problemKey = problemState.data?.problemKey || ''
   const problemLc = problemState.data?.lc ?? lcFromSlug(slug)
@@ -2452,8 +2453,6 @@ export function ProblemDetailPage() {
 
   const [leftTab, setLeftTab] = useState('problem')
   const [rightTab, setRightTab] = useState('tests')
-  const [assistantOpen, setAssistantOpen] = useState(false)
-  const [assistantLaunch, setAssistantLaunch] = useState(null)
   const [focusedTestIds, setFocusedTestIds] = useState([])
   const [selectedSqlSampleId, setSelectedSqlSampleId] = useState(null)
   const [notesView, setNotesView] = useState('mine')
@@ -2507,6 +2506,15 @@ export function ProblemDetailPage() {
   const [showRawStdout, setShowRawStdout] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resettingSolution, setResettingSolution] = useState(false)
+  const {
+    registerProblemContext,
+    unregisterProblemContext,
+    openAssistant,
+    restoreAssistant,
+    closeAssistant,
+    windowState: assistantWindowState,
+    problemContext: activeAssistantProblemContext,
+  } = useAssistantWindow()
 
   const setSectionMessage = useCallback((scope, message) => {
     setSectionMessages((current) => {
@@ -2542,6 +2550,7 @@ export function ProblemDetailPage() {
   const solutionTimersRef = useRef(new Map())
   const pendingNotePatchesRef = useRef(new Map())
   const pendingSolutionPatchesRef = useRef(new Map())
+  const askAiButtonRef = useRef(null)
   const defaultSolutionSeededRef = useRef(new Set())
   const defaultSolutionSeedingRef = useRef(new Set())
   const solutionsRef = useRef([])
@@ -2555,6 +2564,11 @@ export function ProblemDetailPage() {
   const preferredAiProviderMode = userSettingsState.settings?.preferred_ai_provider_mode || 'platform'
   const rightPaneDefaultTab = isSqlTrack ? 'output' : 'tests'
   const effectiveRightTab = isSqlTrack && ['tests', 'cases', 'fixtures', 'stdout', 'result'].includes(rightTab) ? 'results' : rightTab
+  const assistantProblemKey = activeAssistantProblemContext?.problem?.problemKey || null
+  const assistantOpenForCurrentProblem =
+    assistantProblemKey === problemKey && assistantWindowState.status === 'open'
+  const assistantMinimizedForCurrentProblem =
+    assistantProblemKey === problemKey && assistantWindowState.status === 'minimized'
 
   useEffect(() => {
     const noteTimers = noteTimersRef.current
@@ -2645,11 +2659,6 @@ export function ProblemDetailPage() {
       return nextProblemSolutions[0]?.id ?? null
     })
   }, [problemState.data])
-
-  useEffect(() => {
-    setAssistantOpen(false)
-    setAssistantLaunch(null)
-  }, [problemKey, problemLc])
 
   useEffect(() => {
     const activeTestIds = new Set(
@@ -3223,6 +3232,13 @@ export function ProblemDetailPage() {
     [createNoteVersion, notes.length],
   )
 
+  const handleAssistantProviderPreferenceChange = useCallback(
+    (nextMode) => {
+      void updateUserSettings({ preferred_ai_provider_mode: nextMode })
+    },
+    [updateUserSettings],
+  )
+
   const deleteNote = async (id) => {
     if (!supabase || (!problemLc && !problemKey)) {
       return
@@ -3581,20 +3597,6 @@ export function ProblemDetailPage() {
     setBottomPaneCollapsed((current) => !current)
   }, [])
 
-  const openAssistant = useCallback(
-    (launch = null) => {
-      setLeftPaneCollapsed(false)
-      setAssistantOpen(true)
-      setAssistantLaunch(launch)
-    },
-    [],
-  )
-
-  const closeAssistant = useCallback(() => {
-    setAssistantOpen(false)
-    setAssistantLaunch(null)
-  }, [])
-
   const executeRun = async (mode) => {
     setBottomPaneCollapsed(false)
     setRightTab('result')
@@ -3938,6 +3940,192 @@ export function ProblemDetailPage() {
     setShowRawStdout(false)
   }, [selectedResultRun?.id])
 
+  const data = problemState.data
+  const activeTests = data?.tests ?? []
+  const activeSqlFixtures = data?.sqlFixtures ?? []
+  const publicSqlFixtures = activeSqlFixtures.filter((fixture) => fixture.is_public)
+  const sqlSampleFixtures = publicSqlFixtures.length > 0 ? publicSqlFixtures : activeSqlFixtures
+  const selectedSqlSampleFixture =
+    sqlSampleFixtures.find((fixture) => String(fixture.fixture_key || fixture.id) === String(selectedSqlSampleId)) ??
+    sqlSampleFixtures[0] ??
+    null
+  const activeCaseEntries = activeTests
+  const sqlPresentation =
+    isSqlTrack && data?.content?.presentation && Array.isArray(data.content.presentation.schema)
+      ? data.content.presentation
+      : null
+  const examples = (sqlPresentation?.examples ?? data?.content?.presentation?.examples ?? data?.content?.examples ?? []).slice(0, 4)
+  const contentPresentation = data?.content?.presentation ?? {
+    statement: data?.content?.description || '',
+    interfaceItems: [],
+    constraints: [],
+    followUp: [],
+    nodeShape: [],
+  }
+  const dsaStatementVisuals = !isSqlTrack ? extractProblemVisuals(contentPresentation, 'statement') : []
+  const sqlSchemaVisuals = isSqlTrack ? extractProblemVisuals(sqlPresentation ?? contentPresentation, 'schema') : []
+  const activePhaseName = String(data?.row?.phase_name || data?.row?.phaseName || '').trim()
+  const sourcePlatformLabel = isSqlTrack
+    ? sqlPresentation?.source?.platform || sourcePlatformForProblem(data?.row || {})
+    : data?.active?.leetcodeUrl
+      ? 'LeetCode'
+      : data?.active?.neetcodeUrl
+        ? 'NeetCode'
+        : sourcePlatformForProblem(data?.row || {})
+  const assistantProblemSummary = useMemo(
+    () => ({
+      problemKey,
+      trackKey,
+      title: data?.active?.title || '',
+      tier: data?.active?.tier ?? null,
+      phaseName: activePhaseName,
+      statement: sqlPresentation?.statement || contentPresentation.statement,
+      exampleCount: examples.length,
+      schemaCount: Array.isArray(sqlPresentation?.schema) ? sqlPresentation.schema.length : 0,
+      constraintCount: Array.isArray(contentPresentation.constraints) ? contentPresentation.constraints.length : 0,
+    }),
+    [
+      activePhaseName,
+      contentPresentation.constraints,
+      contentPresentation.statement,
+      data?.active?.tier,
+      data?.active?.title,
+      examples.length,
+      problemKey,
+      sqlPresentation?.schema,
+      sqlPresentation?.statement,
+      trackKey,
+    ],
+  )
+
+  const failedResultCaseIds = useMemo(
+    () => selectedResultCases.filter((caseResult) => !caseResult?.passed).map((caseResult) => caseResult.id),
+    [selectedResultCases],
+  )
+
+  const currentResultAttachment = useMemo(() => {
+    if (!isSqlTrack) {
+      if (!selectedResultRun || failedResultCaseIds.length === 0) {
+        return {
+          available: false,
+          label: 'Current results',
+          selected_run_id: null,
+          selected_case_ids: [],
+          selected_fixture_id: null,
+        }
+      }
+
+      return {
+        available: true,
+        label: 'Current results',
+        selected_run_id: selectedResultRun.id,
+        selected_case_ids: failedResultCaseIds,
+        selected_fixture_id: null,
+      }
+    }
+
+    if (!selectedSqlPublicRun || !selectedSqlPublicCase || selectedSqlPublicCase.passed) {
+      return {
+        available: false,
+        label: 'Current results',
+        selected_run_id: null,
+        selected_case_ids: [],
+        selected_fixture_id: null,
+      }
+    }
+
+    return {
+      available: true,
+      label: 'Current results',
+      selected_run_id: selectedSqlPublicRun.id,
+      selected_case_ids: [],
+      selected_fixture_id: selectedSqlSampleFixture ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id) : null,
+    }
+  }, [
+    failedResultCaseIds,
+    isSqlTrack,
+    selectedResultRun,
+    selectedSqlPublicCase,
+    selectedSqlPublicRun,
+    selectedSqlSampleFixture,
+  ])
+
+  const assistantWorkspaceContext = useMemo(
+    () => ({
+      editorText: activeSolution?.code || '',
+      activeNoteId: activeNote?.id ?? null,
+      activeNoteLabel: activeNote?.label || '',
+      activeNoteContent: activeNote?.content ?? null,
+      stdoutText: assistantStdoutText,
+      selectedRunId:
+        selectedResultRun?.id ||
+        selectedSqlPublicRun?.id ||
+        selectedSqlSubmitRun?.id ||
+        runOutput.runId ||
+        null,
+      selectedRunStatus:
+        selectedResultRun?.status ||
+        selectedSqlPublicRun?.status ||
+        selectedSqlSubmitRun?.status ||
+        runOutput.status ||
+        '',
+      selectedCaseIds: focusedTestIds,
+      selectedFixtureId: selectedSqlSampleFixture ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id) : null,
+      currentResultAttachment,
+    }),
+    [
+      activeNote?.content,
+      activeNote?.id,
+      activeNote?.label,
+      activeSolution?.code,
+      assistantStdoutText,
+      currentResultAttachment,
+      focusedTestIds,
+      runOutput.runId,
+      runOutput.status,
+      selectedResultRun?.id,
+      selectedResultRun?.status,
+      selectedSqlPublicRun?.id,
+      selectedSqlPublicRun?.status,
+      selectedSqlSampleFixture,
+      selectedSqlSubmitRun?.id,
+      selectedSqlSubmitRun?.status,
+    ],
+  )
+
+  useEffect(() => {
+    if (!data || !assistantProblemSummary.problemKey) {
+      return
+    }
+
+    registerProblemContext({
+      problem: assistantProblemSummary,
+      workspaceContext: assistantWorkspaceContext,
+      preferredProviderMode: preferredAiProviderMode,
+      onProviderPreferenceChange: handleAssistantProviderPreferenceChange,
+      onInsertIntoCurrentNote: insertAiPayloadIntoCurrentNote,
+      onCreateAiNote: createAiNoteFromPayload,
+      onOpenNote: openNoteById,
+    })
+  }, [
+    assistantProblemSummary,
+    assistantWorkspaceContext,
+    createAiNoteFromPayload,
+    data,
+    handleAssistantProviderPreferenceChange,
+    insertAiPayloadIntoCurrentNote,
+    openNoteById,
+    preferredAiProviderMode,
+    registerProblemContext,
+  ])
+
+  useEffect(
+    () => () => {
+      unregisterProblemContext(assistantProblemSummary.problemKey)
+    },
+    [assistantProblemSummary.problemKey, unregisterProblemContext],
+  )
+
   if (problemState.loading) {
     return (
       <section className="h-[100dvh] w-full overflow-hidden p-3 md:p-4">
@@ -3954,94 +4142,6 @@ export function ProblemDetailPage() {
         </div>
       </section>
     )
-  }
-
-  const { data } = problemState
-  const activeTests = data.tests ?? []
-  const activeSqlFixtures = data.sqlFixtures ?? []
-  const publicSqlFixtures = activeSqlFixtures.filter((fixture) => fixture.is_public)
-  const sqlSampleFixtures = publicSqlFixtures.length > 0 ? publicSqlFixtures : activeSqlFixtures
-  const selectedSqlSampleFixture =
-    sqlSampleFixtures.find((fixture) => String(fixture.fixture_key || fixture.id) === String(selectedSqlSampleId)) ??
-    sqlSampleFixtures[0] ??
-    null
-  const activeCaseEntries = activeTests
-  const sqlPresentation =
-    isSqlTrack && data.content?.presentation && Array.isArray(data.content.presentation.schema)
-      ? data.content.presentation
-      : null
-  const examples = (sqlPresentation?.examples ?? data.content?.presentation?.examples ?? data.content?.examples ?? []).slice(0, 4)
-  const contentPresentation = data.content?.presentation ?? {
-    statement: data.content?.description || '',
-    interfaceItems: [],
-    constraints: [],
-    followUp: [],
-    nodeShape: [],
-  }
-  const dsaStatementVisuals = !isSqlTrack ? extractProblemVisuals(contentPresentation, 'statement') : []
-  const sqlSchemaVisuals = isSqlTrack ? extractProblemVisuals(sqlPresentation ?? contentPresentation, 'schema') : []
-  const activePhaseName = String(data.row.phase_name || data.row.phaseName || '').trim()
-  const sourcePlatformLabel = isSqlTrack
-    ? sqlPresentation?.source?.platform || sourcePlatformForProblem(data.row)
-    : data.active.leetcodeUrl
-      ? 'LeetCode'
-      : data.active.neetcodeUrl
-        ? 'NeetCode'
-        : sourcePlatformForProblem(data.row)
-  const assistantProblemSummary = {
-    problemKey,
-    trackKey,
-    title: data.active.title,
-    tier: data.active.tier,
-    phaseName: activePhaseName,
-    statement: sqlPresentation?.statement || contentPresentation.statement,
-    exampleCount: examples.length,
-    schemaCount: Array.isArray(sqlPresentation?.schema) ? sqlPresentation.schema.length : 0,
-    constraintCount: Array.isArray(contentPresentation.constraints) ? contentPresentation.constraints.length : 0,
-  }
-  const assistantWorkspaceContext = {
-    editorText: activeSolution?.code || '',
-    activeNoteId: activeNote?.id ?? null,
-    activeNoteLabel: activeNote?.label || '',
-    activeNoteContent: activeNote?.content || defaultNoteContent(),
-    stdoutText: assistantStdoutText,
-    selectedRunId:
-      selectedResultRun?.id ||
-      selectedSqlPublicRun?.id ||
-      selectedSqlSubmitRun?.id ||
-      runOutput.runId ||
-      null,
-    selectedRunStatus:
-      selectedResultRun?.status ||
-      selectedSqlPublicRun?.status ||
-      selectedSqlSubmitRun?.status ||
-      runOutput.status ||
-      '',
-    selectedCaseIds: focusedTestIds,
-    selectedFixtureId: selectedSqlSampleFixture ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id) : null,
-    fixtures: sqlSampleFixtures,
-  }
-  const showDesktopAssistant = assistantOpen && !leftPaneCollapsed && isWideLayout
-  const showMobileAssistant = assistantOpen && !isWideLayout
-
-  const launchAssistantWithPreset = (launch = {}) => {
-    openAssistant({
-      chatMode: 'assist',
-      message: launch.message || '',
-      attachments: {
-        include_problem: true,
-        include_editor: Boolean(assistantWorkspaceContext.editorText.trim()),
-        include_latest_run: Boolean(assistantWorkspaceContext.selectedRunId),
-        include_note: false,
-        include_stdout: false,
-        selected_case_ids: assistantWorkspaceContext.selectedCaseIds,
-        selected_fixture_id: assistantWorkspaceContext.selectedFixtureId,
-        selected_run_id: assistantWorkspaceContext.selectedRunId,
-        note_id: assistantWorkspaceContext.activeNoteId,
-        provider_mode: preferredAiProviderMode,
-        ...(launch.attachments || {}),
-      },
-    })
   }
 
   const copySelectedSqlOutput = async () => {
@@ -4234,30 +4334,9 @@ export function ProblemDetailPage() {
         <div ref={workspaceSplitRef} className="flex h-full min-h-0 min-w-0 w-full flex-col gap-3 xl:flex-row">
           {!leftPaneCollapsed ? (
             <section
-              className={[
-                'flex min-h-0 min-w-0 w-full flex-col xl:shrink-0',
-                showDesktopAssistant ? '' : 'border border-border-subtle bg-surface',
-              ].join(' ')}
+              className="flex min-h-0 min-w-0 w-full flex-col border border-border-subtle bg-surface xl:shrink-0"
               style={isWideLayout ? { width: `${leftPaneWidth}%` } : undefined}
             >
-            {showDesktopAssistant ? (
-              <ProblemAssistantDrawer
-                open={assistantOpen}
-                onClose={closeAssistant}
-                problem={assistantProblemSummary}
-                workspaceContext={assistantWorkspaceContext}
-                preferredProviderMode={preferredAiProviderMode}
-                onProviderPreferenceChange={(nextMode) => {
-                  void userSettingsState.update({ preferred_ai_provider_mode: nextMode })
-                }}
-                initialLaunch={assistantLaunch}
-                onLaunchHandled={() => setAssistantLaunch(null)}
-                onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
-                onCreateAiNote={createAiNoteFromPayload}
-                onOpenNote={openNoteById}
-              />
-            ) : (
-              <>
             <div className="flex min-w-0 items-center border-b border-border-subtle">
               <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
                 <div className="flex min-w-max items-center">
@@ -4284,28 +4363,28 @@ export function ProblemDetailPage() {
             </div>
 
             <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
-	              {(() => {
-	                const tabToScope = { problem: 'progress', notes: 'notes', solutions: 'solutions', resources: 'resources', comments: null, shared: null }
-	                const scope = tabToScope[leftTab]
+              {(() => {
+                const tabToScope = { problem: 'progress', notes: 'notes', solutions: 'solutions', resources: 'resources', comments: null, shared: null }
+                const scope = tabToScope[leftTab]
                 const msg = scope ? sectionMessages[scope] : ''
                 return msg ? (
                   <div className="mb-3 border border-border-subtle bg-surface px-2.5 py-1.5 text-[11px] text-text-primary">
                     {msg}
-	                    <button type="button" onClick={() => setSectionMessage(scope, '')} className="ml-2 text-text-muted hover:text-accent">×</button>
-	                  </div>
-	                ) : null
-	              })()}
-	              <AnimatePresence initial={false} mode="wait">
-	                <Motion.div
-	                  key={`${isSqlTrack ? 'sql' : 'dsa'}-${leftTab}`}
-	                  variants={panelSwap}
-	                  initial="initial"
-	                  animate="animate"
-	                  exit="exit"
-	                  className="space-y-3"
-	                >
-	              {leftTab === 'problem' ? (
-	                <div className="space-y-3">
+                    <button type="button" onClick={() => setSectionMessage(scope, '')} className="ml-2 text-text-muted hover:text-accent">×</button>
+                  </div>
+                ) : null
+              })()}
+              <AnimatePresence initial={false} mode="wait">
+                <Motion.div
+                  key={`${isSqlTrack ? 'sql' : 'dsa'}-${leftTab}`}
+                  variants={panelSwap}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="space-y-3"
+                >
+              {leftTab === 'problem' ? (
+                <div className="space-y-3">
                   <div className="border border-border-subtle bg-base p-3">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                       <p className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Statement</p>
@@ -4824,17 +4903,14 @@ export function ProblemDetailPage() {
               {/* ── Comments tab ── */}
               {leftTab === 'comments' ? (
                 <CommentsSection
-	                  commentsState={commentsState}
-	                  userKey={userKey}
-	                  focusedCommentId={focusedCommentId}
-	                />
-	              ) : null}
-	                </Motion.div>
-	              </AnimatePresence>
-
-	            </div>
-              </>
-            )}
+                  commentsState={commentsState}
+                  userKey={userKey}
+                  focusedCommentId={focusedCommentId}
+                />
+              ) : null}
+                </Motion.div>
+              </AnimatePresence>
+            </div>
           </section>
           ) : null}
 
@@ -4943,32 +5019,43 @@ export function ProblemDetailPage() {
                       </button>
                     ) : null}
                     <Motion.button
+                      ref={askAiButtonRef}
                       type="button"
-                      onClick={() =>
-                        launchAssistantWithPreset({
-                          attachments: {
-                            include_latest_run: Boolean(
-                              isSqlTrack ? selectedSqlPublicRun?.id || selectedSqlSubmitRun?.id : selectedResultRun?.id,
-                            ),
-                            selected_run_id:
-                              isSqlTrack
-                                ? selectedSqlPublicRun?.id || selectedSqlSubmitRun?.id || null
-                                : selectedResultRun?.id || null,
-                            selected_fixture_id: isSqlTrack
-                              ? selectedSqlSampleFixture
-                                ? String(selectedSqlSampleFixture.fixture_key || selectedSqlSampleFixture.id)
-                                : null
-                              : null,
-                            selected_case_ids: !isSqlTrack ? focusedTestIds : [],
-                          },
-                        })
-                      }
-                      className="inline-flex h-7 items-center gap-1 border border-border-subtle px-2 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+                      onClick={(event) => {
+                        const rectSource = askAiButtonRef.current || event.currentTarget
+                        const rect = rectSource?.getBoundingClientRect?.()
+                        const launcherRect = rect
+                          ? {
+                              left: rect.left,
+                              top: rect.top,
+                              width: rect.width,
+                              height: rect.height,
+                            }
+                          : null
+
+                        if (assistantOpenForCurrentProblem) {
+                          closeAssistant()
+                          return
+                        }
+
+                        if (assistantMinimizedForCurrentProblem) {
+                          restoreAssistant()
+                          return
+                        }
+
+                        openAssistant({ launcherRect })
+                      }}
+                      className={[
+                        'inline-flex h-7 items-center gap-1 border px-2 text-[11px] transition-colors',
+                        assistantOpenForCurrentProblem
+                          ? 'border-accent bg-accent/10 text-accent'
+                          : 'border-border-subtle text-text-muted hover:border-accent hover:text-accent',
+                      ].join(' ')}
                       whileTap={buttonTap.whileTap}
                       transition={buttonTap.transition}
                     >
-                      <MessageSquareReply size={11} />
-                      Ask AI
+                      {assistantOpenForCurrentProblem ? <X size={11} /> : <MessageSquareReply size={11} />}
+                      {assistantOpenForCurrentProblem ? 'Close AI' : assistantMinimizedForCurrentProblem ? 'Show AI' : 'Ask AI'}
                     </Motion.button>
                     <Motion.button
                       type="button"
@@ -5585,25 +5672,6 @@ export function ProblemDetailPage() {
             </div>
           </section>
         </div>
-
-        {showMobileAssistant ? (
-          <ProblemAssistantDrawer
-            open={assistantOpen}
-            mobile
-            onClose={closeAssistant}
-            problem={assistantProblemSummary}
-            workspaceContext={assistantWorkspaceContext}
-            preferredProviderMode={preferredAiProviderMode}
-            onProviderPreferenceChange={(nextMode) => {
-              void userSettingsState.update({ preferred_ai_provider_mode: nextMode })
-            }}
-            initialLaunch={assistantLaunch}
-            onLaunchHandled={() => setAssistantLaunch(null)}
-            onInsertIntoCurrentNote={insertAiPayloadIntoCurrentNote}
-            onCreateAiNote={createAiNoteFromPayload}
-            onOpenNote={openNoteById}
-          />
-        ) : null}
 
         <Modal
           open={resetConfirmOpen}

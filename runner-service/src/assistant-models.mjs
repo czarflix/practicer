@@ -54,30 +54,44 @@ async function getVertexAccessToken() {
 }
 
 async function getVertexAccessTokenWithOptions({ allowDirectToken = true } = {}) {
-  const directToken = String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim()
-  if (allowDirectToken && directToken) {
-    return directToken
-  }
-
   const now = Date.now()
   if (cachedAccessToken && now < cachedAccessTokenExpiry - 60_000) {
     return cachedAccessToken
   }
 
-  const client = await googleAuth.getClient()
-  const tokenResponse = await client.getAccessToken()
-  const accessToken =
-    typeof tokenResponse === 'string'
-      ? tokenResponse
-      : tokenResponse?.token || tokenResponse?.res?.data?.access_token || ''
+  try {
+    const client = await googleAuth.getClient()
+    const tokenResponse = await client.getAccessToken()
+    const accessToken =
+      typeof tokenResponse === 'string'
+        ? tokenResponse
+        : tokenResponse?.token || tokenResponse?.res?.data?.access_token || ''
 
-  if (!accessToken) {
-    throw new Error('Unable to acquire a Vertex AI access token.')
+    if (accessToken) {
+      cachedAccessToken = accessToken
+      cachedAccessTokenExpiry = now + 45 * 60_000
+      return cachedAccessToken
+    }
+  } catch (error) {
+    const directToken = String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim()
+    if (allowDirectToken && directToken) {
+      return directToken
+    }
+
+    const reason = String(error instanceof Error ? error.message : error || '').trim()
+    throw new Error(
+      reason
+        ? `Unable to acquire a Vertex AI access token via ADC. Configure GOOGLE_APPLICATION_CREDENTIALS or host ADC. ${reason}`
+        : 'Unable to acquire a Vertex AI access token via ADC. Configure GOOGLE_APPLICATION_CREDENTIALS or host ADC.',
+    )
   }
 
-  cachedAccessToken = accessToken
-  cachedAccessTokenExpiry = now + 45 * 60_000
-  return cachedAccessToken
+  const directToken = String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim()
+  if (allowDirectToken && directToken) {
+    return directToken
+  }
+
+  throw new Error('Unable to acquire a Vertex AI access token. Configure GOOGLE_APPLICATION_CREDENTIALS or host ADC.')
 }
 
 function isVertexAuthFailure(response, payload) {
@@ -99,7 +113,9 @@ async function requestStructuredJsonOnce({
   maxOutputTokens,
   allowDirectToken = true,
 }) {
-  const accessToken = provider === 'vertex' ? await getVertexAccessTokenWithOptions({ allowDirectToken }) : ''
+  const vertexApiKey = provider === 'vertex' ? String(runnerConfig.googleApiKey || '').trim() : ''
+  const accessToken =
+    provider === 'vertex' && !vertexApiKey ? await getVertexAccessTokenWithOptions({ allowDirectToken }) : ''
   const response = await fetch(buildModelUrl({ provider, model, apiKey }), {
     method: 'POST',
     headers: buildHeaders({ provider, apiKey, accessToken }),
@@ -141,7 +157,9 @@ function buildModelUrl({ provider, model, apiKey }) {
   }
 
   const location = runnerConfig.googleCloudLocation
-  return `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`
+  const baseUrl = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`
+  const vertexApiKey = String(runnerConfig.googleApiKey || '').trim()
+  return vertexApiKey ? `${baseUrl}?key=${encodeURIComponent(vertexApiKey)}` : baseUrl
 }
 
 function buildHeaders({ provider, apiKey, accessToken }) {
@@ -151,10 +169,15 @@ function buildHeaders({ provider, apiKey, accessToken }) {
     }
   }
 
-  return {
-    Authorization: `Bearer ${accessToken}`,
+  const headers = {
     'Content-Type': 'application/json; charset=utf-8',
   }
+
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
+  }
+
+  return headers
 }
 
 function extractTextFromCandidate(candidate) {
@@ -218,6 +241,7 @@ export async function generateStructuredJson({
 
   if (
     provider === 'vertex' &&
+    !String(runnerConfig.googleApiKey || '').trim() &&
     String(process.env.GOOGLE_CLOUD_ACCESS_TOKEN || '').trim() &&
     isVertexAuthFailure(response, payload)
   ) {

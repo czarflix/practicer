@@ -29,6 +29,8 @@ services:
       dockerfile: Dockerfile
     image: dsa-runner:latest
     env_file: .env
+    volumes:
+      - ./credentials:/app/credentials:ro
     ports:
       - "0.0.0.0:8787:8787"   # Expose to internet (lock down with nginx + TLS in prod)
     depends_on:
@@ -47,4 +49,3 @@ services:
 
 volumes:
   pgdata:
-

@@ -45,6 +45,7 @@ export const runnerConfig = {
 
   googleCloudProject: String(process.env.GOOGLE_CLOUD_PROJECT || '').trim(),
   googleCloudLocation: String(process.env.GOOGLE_CLOUD_LOCATION || 'global').trim() || 'global',
+  googleApiKey: String(process.env.GOOGLE_API_KEY || process.env.VERTEX_AI_API_KEY || '').trim(),
   vertexModelFlash: String(process.env.VERTEX_AI_MODEL_FLASH || 'gemini-3-flash').trim(),
   vertexModelPro: String(process.env.VERTEX_AI_MODEL_PRO || 'gemini-3-pro').trim(),
   backgroundModelFlash25: String(process.env.VERTEX_AI_BACKGROUND_MODEL || 'gemini-2.5-flash').trim(),
