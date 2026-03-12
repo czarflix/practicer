@@ -357,18 +357,45 @@ function ProblemsTab() {
           difficulty: problem.difficulty,
         }
         if (savedProblemKey) {
-          const { error: deleteContentError } = await supabase
-            .from('problem_content')
-            .delete()
-            .eq('problem_key', savedProblemKey)
+          let existingContent = null
+          const lookupContent = async (column, value) => {
+            if (value === null || value === undefined || value === '') {
+              return null
+            }
 
-          if (deleteContentError) throw deleteContentError
+            const { data, error } = await supabase
+              .from('problem_content')
+              .select('content_id,problem_key,problem_lc')
+              .eq(column, value)
+              .maybeSingle()
 
-          const { error: insertContentError } = await supabase
-            .from('problem_content')
-            .insert(contentPayload)
+            if (error) throw error
+            return data ?? null
+          }
 
-          if (insertContentError) throw insertContentError
+          const originalProblemKey = modalMode === 'edit' ? editingProblem?.problem_key || null : null
+          const originalProblemLc = modalMode === 'edit' ? editingProblem?.problem_lc ?? editingProblem?.lc ?? null : null
+
+          existingContent =
+            (await lookupContent('problem_key', originalProblemKey)) ||
+            (await lookupContent('problem_lc', originalProblemLc)) ||
+            (await lookupContent('problem_key', savedProblemKey)) ||
+            (await lookupContent('problem_lc', savedProblem.problem_lc ?? null))
+
+          if (existingContent?.content_id) {
+            const { error: updateContentError } = await supabase
+              .from('problem_content')
+              .update(contentPayload)
+              .eq('content_id', existingContent.content_id)
+
+            if (updateContentError) throw updateContentError
+          } else {
+            const { error: insertContentError } = await supabase
+              .from('problem_content')
+              .insert(contentPayload)
+
+            if (insertContentError) throw insertContentError
+          }
         } else {
           const { error: contentError } = await supabase
             .from('problem_content')

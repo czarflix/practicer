@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
-import { deriveProblemEntryPoint, normalizeProblemDescriptionForStorage } from '../../lib/problem-content'
+import { buildProblemPresentation, deriveProblemEntryPoint, normalizeProblemDescriptionForStorage } from '../../lib/problem-content'
 import { companiesToInput, parseCompanyInput } from '../../lib/problem-utils'
 import {
   buildProblemKey,
@@ -60,6 +60,95 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function cloneJsonValue(value) {
+  if (value == null) {
+    return value
+  }
+
+  return JSON.parse(JSON.stringify(value))
+}
+
+function normalizePresentationObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length === 0) {
+    return null
+  }
+
+  return cloneJsonValue(value)
+}
+
+function prettyJson(value, fallback) {
+  return JSON.stringify(value ?? fallback, null, 2)
+}
+
+function parseJsonOrThrow(label, value, fallback) {
+  const text = String(value ?? '').trim()
+  if (!text) {
+    return cloneJsonValue(fallback)
+  }
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`${label} must be valid JSON.`)
+  }
+}
+
+function parseJsonArrayOrThrow(label, value, fallback = []) {
+  const parsed = parseJsonOrThrow(label, value, fallback)
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON array.`)
+  }
+  return parsed
+}
+
+function markdownTable(columns, rows) {
+  const normalizedColumns = Array.isArray(columns) ? columns.map((column) => String(column ?? '').trim()) : []
+  const normalizedRows = Array.isArray(rows) ? rows : []
+  if (normalizedColumns.length === 0) {
+    return ''
+  }
+
+  const header = `| ${normalizedColumns.join(' | ')} |`
+  const divider = `| ${normalizedColumns.map(() => ':---').join(' | ')} |`
+  const body = normalizedRows
+    .map((row) => {
+      const cells = Array.isArray(row) ? row : []
+      return `| ${normalizedColumns.map((_, index) => String(cells[index] ?? '')).join(' | ')} |`
+    })
+    .join('\n')
+
+  return [header, divider, body].filter(Boolean).join('\n')
+}
+
+function sqlStructuredExamplesToLegacyExamples(examples) {
+  if (!Array.isArray(examples)) {
+    return []
+  }
+
+  return examples
+    .map((example) => {
+      const input = Array.isArray(example?.tables)
+        ? example.tables
+            .map((table) => {
+              const tableName = String(table?.name || 'table').trim()
+              const tableMarkdown = markdownTable(table?.columns || [], table?.rows || [])
+              return tableMarkdown ? `${tableName} table:\n${tableMarkdown}` : ''
+            })
+            .filter(Boolean)
+            .join('\n\n')
+        : ''
+      const output = example?.output ? markdownTable(example.output.columns || [], example.output.rows || []) : ''
+      const explanation = String(example?.explanation || '').trim()
+
+      return {
+        input,
+        output,
+        ...(explanation ? { explanation } : {}),
+      }
+    })
+    .filter((example) => example.input || example.output || example.explanation)
+}
+
 function phaseLabelFor(phaseChoices, phaseValue) {
   const match = phaseChoices.find((choice) => Number(choice.phase) === Number(phaseValue))
   return match?.name || ''
@@ -90,6 +179,10 @@ function dsaDefaults(phaseChoices) {
     starter_snippet: '',
     entry_point: '',
     examples: [createEmptyExample()],
+    presentation: null,
+    sql_schema_text: '[]',
+    sql_examples_text: '[]',
+    sql_requirements_text: '[]',
     problem_lc: '',
     leetcode_url: '',
     neetcode_url: '',
@@ -133,6 +226,10 @@ function sqlDefaults() {
     starter_snippet: 'SELECT\n  -- your code here\n;',
     entry_point: '',
     examples: [createEmptyExample()],
+    presentation: null,
+    sql_schema_text: '[]',
+    sql_examples_text: '[]',
+    sql_requirements_text: '[]',
     problem_lc: '',
     leetcode_url: '',
     neetcode_url: '',
@@ -155,9 +252,17 @@ function buildDefaultForm(trackKey, phaseChoices) {
   return trackKey === 'sql' ? sqlDefaults() : dsaDefaults(phaseChoices)
 }
 
-function contentToFormFields(content) {
-  const examples = Array.isArray(content?.input_output)
-    ? content.input_output
+function contentToFormFields(content, trackKey = 'dsa') {
+  const presentation = normalizePresentationObject(content?.presentation)
+  const structuredExamples = Array.isArray(presentation?.examples) ? presentation.examples : []
+  const exampleSource =
+    Array.isArray(content?.input_output) && content.input_output.length > 0
+      ? content.input_output
+      : trackKey === 'sql'
+        ? sqlStructuredExamplesToLegacyExamples(structuredExamples)
+        : []
+  const examples = Array.isArray(exampleSource)
+    ? exampleSource
         .map((item) => ({
           input: typeof item?.input === 'string' ? item.input : item?.input != null ? JSON.stringify(item.input, null, 2) : '',
           output: typeof item?.output === 'string' ? item.output : item?.output != null ? JSON.stringify(item.output, null, 2) : '',
@@ -168,10 +273,17 @@ function contentToFormFields(content) {
 
   return {
     tags: Array.isArray(content?.tags) ? content.tags.join(', ') : '',
-    statement: content?.statement_clean || content?.problem_description || '',
+    statement: content?.statement_clean || content?.problem_description || presentation?.statement || '',
     starter_snippet: content?.starter_snippet || content?.starter_code || '',
     entry_point: content?.entry_point || '',
     examples: examples.length > 0 ? examples : [createEmptyExample()],
+    presentation,
+    sql_schema_text: prettyJson(presentation?.schema, []),
+    sql_examples_text: prettyJson(structuredExamples, []),
+    sql_requirements_text: prettyJson(presentation?.requirements, []),
+    ...(presentation?.source?.platform ? { source_platform: presentation.source.platform } : {}),
+    ...(presentation?.source?.canonical_url ? { canonical_source_url: presentation.source.canonical_url } : {}),
+    ...(presentation?.source?.original_url ? { source_url: presentation.source.original_url } : {}),
   }
 }
 
@@ -267,6 +379,34 @@ function parseProblemPayload(form, showCompanion, mode) {
     problem_key: problemKey || null,
   }
 
+  const existingPresentation = normalizePresentationObject(form.presentation)
+  const sqlSchema = form.track_key === 'sql' ? parseJsonArrayOrThrow('Schema', form.sql_schema_text, existingPresentation?.schema ?? []) : []
+  const sqlPresentationExamples =
+    form.track_key === 'sql' ? parseJsonArrayOrThrow('Examples', form.sql_examples_text, existingPresentation?.examples ?? []) : []
+  const sqlRequirements =
+    form.track_key === 'sql' ? parseJsonArrayOrThrow('Requirements', form.sql_requirements_text, existingPresentation?.requirements ?? []) : []
+  const nextPresentation =
+    form.track_key === 'sql'
+      ? {
+          ...(existingPresentation || {}),
+          statement: normalizedStatement || existingPresentation?.statement || '',
+          schema: sqlSchema,
+          examples: sqlPresentationExamples,
+          requirements: sqlRequirements,
+          source: {
+            ...(existingPresentation?.source || {}),
+            platform: sourcePlatform || existingPresentation?.source?.platform || '',
+            canonical_url: String(form.canonical_source_url || '').trim() || existingPresentation?.source?.canonical_url || '',
+            original_url: String(form.source_url || '').trim() || existingPresentation?.source?.original_url || '',
+          },
+        }
+      : {
+          ...buildProblemPresentation({ description: normalizedStatement, examples }),
+          ...(Array.isArray(existingPresentation?.visuals) && existingPresentation.visuals.length > 0
+            ? { visuals: cloneJsonValue(existingPresentation.visuals) }
+            : {}),
+        }
+
   const commonContent = {
     problem_key: problemKey || null,
     tags: parseTagInput(form.tags),
@@ -274,10 +414,11 @@ function parseProblemPayload(form, showCompanion, mode) {
     statement_clean: normalizedStatement || null,
     constraints_text: '',
     starter_snippet: starterSnippet || null,
-    input_output: examples,
+    input_output: form.track_key === 'sql' ? sqlStructuredExamplesToLegacyExamples(sqlPresentationExamples) : examples,
     source: 'manual',
     editor_language: form.track_key === 'sql' ? 'sql' : 'python',
     runtime_kind: form.track_key === 'sql' ? 'sql_postgres' : 'python_problem',
+    ...(nextPresentation ? { presentation: nextPresentation } : {}),
     ...(form.track_key === 'dsa'
       ? {
           title: commonProblem.title,
@@ -303,6 +444,7 @@ function parseProblemPayload(form, showCompanion, mode) {
         expected_rows: safeJsonParse(fixture.expected_rows_text, []),
         comparison_mode: String(fixture.comparison_mode || 'unordered_multiset'),
         order_required: Boolean(fixture.order_required),
+        notes: String(fixture.notes || '').trim() || null,
         is_active: true,
       }))
       .filter((fixture) => fixture.setup_sql)
@@ -503,7 +645,7 @@ export function ProblemModal({ open, mode, problem, saving, onClose, onSave, pha
 
         setForm((current) => ({
           ...current,
-          ...contentToFormFields(content),
+          ...contentToFormFields(content, track),
         }))
 
         if (track === 'sql' && problem.problem_key) {
@@ -538,7 +680,7 @@ export function ProblemModal({ open, mode, problem, saving, onClose, onSave, pha
                     expected_rows_text: JSON.stringify(fixture.expected_rows ?? [], null, 2),
                     comparison_mode: fixture.comparison_mode || 'unordered_multiset',
                     order_required: Boolean(fixture.order_required),
-                    notes: '',
+                    notes: fixture.notes || '',
                   }))
                 : current.fixtures,
           }))
@@ -836,7 +978,14 @@ export function ProblemModal({ open, mode, problem, saving, onClose, onSave, pha
         )}
 
         <section className="space-y-3 border border-border-subtle bg-base p-3">
-          <SectionTitle title="Workspace Metadata" detail="This writes the problem content the workspace renders: statement, starter snippet, examples, and editor/runtime hints." />
+          <SectionTitle
+            title="Workspace Metadata"
+            detail={
+              form.track_key === 'sql'
+                ? 'Statement, starter SQL, schema, examples, and requirements render from this payload.'
+                : 'Statement, starter snippet, examples, and editor/runtime hints render from this payload.'
+            }
+          />
           <Field label="Statement">
             <TextArea value={form.statement} onChange={(event) => setField('statement', event.target.value)} rows={10} className="min-h-[220px] leading-6" />
           </Field>
@@ -844,34 +993,63 @@ export function ProblemModal({ open, mode, problem, saving, onClose, onSave, pha
             <TextArea value={form.starter_snippet} onChange={(event) => setField('starter_snippet', event.target.value)} rows={10} className="min-h-[220px] font-mono leading-6" />
           </Field>
 
-          <div className="space-y-2">
-            <SectionTitle
-              title="Examples"
-              detail="Structured examples render directly in the problem pane."
-              action={<RowActionButton onClick={addExample} icon={<Plus size={12} />} label="Add" />}
-            />
-            <div className="space-y-2">
-              {form.examples.map((example, index) => (
-                <div key={`example-row-${index}`} className="space-y-2 border border-border-subtle bg-surface p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-text-muted">Example {index + 1}</p>
-                    <RowActionButton onClick={() => removeExample(index)} icon={<Trash2 size={12} />} label="Remove" tone="danger" disabled={form.examples.length === 1} />
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <Field label="Input">
-                      <TextArea value={example.input} onChange={(event) => updateExample(index, 'input', event.target.value)} rows={4} className="font-mono leading-6" />
-                    </Field>
-                    <Field label="Output">
-                      <TextArea value={example.output} onChange={(event) => updateExample(index, 'output', event.target.value)} rows={4} className="font-mono leading-6" />
-                    </Field>
-                  </div>
-                  <Field label="Explanation">
-                    <TextArea value={example.explanation} onChange={(event) => updateExample(index, 'explanation', event.target.value)} rows={3} className="leading-6" />
-                  </Field>
-                </div>
-              ))}
+          {form.track_key === 'sql' ? (
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <Field label="Schema (JSON array)">
+                <TextArea
+                  value={form.sql_schema_text}
+                  onChange={(event) => setField('sql_schema_text', event.target.value)}
+                  rows={8}
+                  className="min-h-[220px] font-mono leading-6"
+                />
+              </Field>
+              <Field label="Examples (JSON array)">
+                <TextArea
+                  value={form.sql_examples_text}
+                  onChange={(event) => setField('sql_examples_text', event.target.value)}
+                  rows={8}
+                  className="min-h-[220px] font-mono leading-6"
+                />
+              </Field>
+              <Field label="Requirements (JSON array)">
+                <TextArea
+                  value={form.sql_requirements_text}
+                  onChange={(event) => setField('sql_requirements_text', event.target.value)}
+                  rows={6}
+                  className="min-h-[180px] font-mono leading-6 md:col-span-2"
+                />
+              </Field>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <SectionTitle
+                title="Examples"
+                detail="Structured examples render directly in the problem pane."
+                action={<RowActionButton onClick={addExample} icon={<Plus size={12} />} label="Add" />}
+              />
+              <div className="space-y-2">
+                {form.examples.map((example, index) => (
+                  <div key={`example-row-${index}`} className="space-y-2 border border-border-subtle bg-surface p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-text-muted">Example {index + 1}</p>
+                      <RowActionButton onClick={() => removeExample(index)} icon={<Trash2 size={12} />} label="Remove" tone="danger" disabled={form.examples.length === 1} />
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <Field label="Input">
+                        <TextArea value={example.input} onChange={(event) => updateExample(index, 'input', event.target.value)} rows={4} className="font-mono leading-6" />
+                      </Field>
+                      <Field label="Output">
+                        <TextArea value={example.output} onChange={(event) => updateExample(index, 'output', event.target.value)} rows={4} className="font-mono leading-6" />
+                      </Field>
+                    </div>
+                    <Field label="Explanation">
+                      <TextArea value={example.explanation} onChange={(event) => updateExample(index, 'explanation', event.target.value)} rows={3} className="leading-6" />
+                    </Field>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {form.track_key === 'dsa' ? (
@@ -1014,8 +1192,8 @@ export function ProblemModal({ open, mode, problem, saving, onClose, onSave, pha
           <button type="button" onClick={onClose} className="h-8 border border-border-subtle px-3 text-xs text-text-muted hover:border-accent hover:text-accent">
             Cancel
           </button>
-          <button type="submit" disabled={saving} className="h-8 border border-accent bg-accent/10 px-3 text-xs text-accent hover:bg-accent/20 disabled:opacity-50">
-            {saving ? 'Saving…' : mode === 'edit' ? 'Save Changes' : 'Create Problem'}
+          <button type="submit" disabled={saving || contentLoading} className="h-8 border border-accent bg-accent/10 px-3 text-xs text-accent hover:bg-accent/20 disabled:opacity-50">
+            {saving ? 'Saving…' : contentLoading ? 'Loading…' : mode === 'edit' ? 'Save Changes' : 'Create Problem'}
           </button>
         </div>
       </form>
