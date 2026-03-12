@@ -507,27 +507,45 @@ function parseDescription(text) {
   return blocks
 }
 
-function FormattedDescription({ text }) {
+function FormattedRichText({ text, emptyMessage = '', compact = false }) {
   const blocks = useMemo(() => parseDescription(text), [text])
 
   if (blocks.length === 0) {
-    return <p className="reading-copy text-[15px] text-text-muted">No dataset statement available for this problem yet.</p>
+    if (!emptyMessage) {
+      return null
+    }
+    return (
+      <p className={compact ? 'text-[14px] text-text-muted' : 'reading-copy text-[15px] text-text-muted'}>
+        {emptyMessage}
+      </p>
+    )
   }
 
+  const containerClass = compact
+    ? 'space-y-2.5 text-[14px] leading-6 text-text-primary'
+    : 'reading-copy space-y-3.5 text-[15px] leading-7 text-text-primary'
+  const headingOneClass = compact
+    ? 'text-[15px] font-semibold tracking-[-0.01em] text-text-primary'
+    : 'text-[17px] font-semibold tracking-[-0.01em] text-text-primary'
+  const headingTwoClass = compact ? 'text-[14px] font-semibold text-text-primary' : 'text-[15px] font-semibold text-text-primary'
+  const codeClass = compact
+    ? 'overflow-x-auto border border-border-subtle bg-surface p-2 font-mono text-[11px] leading-5 text-text-primary'
+    : 'overflow-x-auto border border-border-subtle bg-surface p-2.5 font-mono text-[12px] leading-6 text-text-primary'
+
   return (
-    <div className="reading-copy space-y-3.5 text-[15px] leading-7 text-text-primary">
+    <div className={containerClass}>
       {blocks.map((block, index) => {
         if (block.type === 'heading') {
           if (block.level === 1) {
             return (
-              <h2 key={`desc-${index}`} className="text-[17px] font-semibold tracking-[-0.01em] text-text-primary">
+              <h2 key={`desc-${index}`} className={headingOneClass}>
                 {block.text}
               </h2>
             )
           }
 
           return (
-            <h3 key={`desc-${index}`} className="text-[15px] font-semibold text-text-primary">
+            <h3 key={`desc-${index}`} className={headingTwoClass}>
               {block.text}
             </h3>
           )
@@ -535,10 +553,7 @@ function FormattedDescription({ text }) {
 
         if (block.type === 'code') {
           return (
-            <pre
-              key={`desc-${index}`}
-              className="overflow-x-auto border border-border-subtle bg-surface p-2.5 font-mono text-[12px] leading-6 text-text-primary"
-            >
+            <pre key={`desc-${index}`} className={codeClass}>
               {block.text}
             </pre>
           )
@@ -776,7 +791,7 @@ function SqlExamplesSection({ examples }) {
                 </div>
               ) : null}
               {example?.explanation ? (
-                <p className="text-[14px] leading-6 text-text-primary">{example.explanation}</p>
+                <FormattedRichText text={example.explanation} compact />
               ) : null}
             </div>
           </article>
@@ -794,14 +809,12 @@ function SqlRequirementsSection({ requirements }) {
   return (
     <div className="space-y-2 border border-border-subtle bg-base p-3">
       <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-text-muted">Requirements</p>
-      <div className="border border-border-subtle bg-surface p-2.5">
-        <ul className="list-disc space-y-1.5 pl-5">
+      <div className="divide-y divide-border-subtle border border-border-subtle bg-surface">
         {requirements.map((item, index) => (
-          <li key={`sql-requirement-${index}`} className="text-[14px] leading-6 text-text-primary">
-            {item}
-          </li>
+          <div key={`sql-requirement-${index}`} className="px-3 py-2.5">
+            <FormattedRichText text={typeof item === 'string' ? item : JSON.stringify(item, null, 2)} compact />
+          </div>
         ))}
-        </ul>
       </div>
     </div>
   )
@@ -836,7 +849,7 @@ function ProblemExamplesSection({ examples }) {
                 {example?.explanation ? (
                   <div className="space-y-1">
                     <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-text-muted">Explanation</p>
-                    <p className="text-[12px] leading-6 text-text-primary">{example.explanation}</p>
+                    <FormattedRichText text={example.explanation} compact />
                   </div>
                 ) : null}
               </div>
@@ -906,7 +919,7 @@ function ProblemConstraintsSection({ presentation }) {
           <div className="space-y-1 border border-border-subtle bg-surface p-2">
             {constraints.map((line, index) => (
               <p key={`constraint-${index}`} className="font-mono text-[11px] leading-5 text-text-primary">
-                {line}
+                {renderInlineText(line, `constraint-${index}`)}
               </p>
             ))}
           </div>
@@ -4391,7 +4404,10 @@ export function ProblemDetailPage() {
                       <CompanySymbols companies={data.active.companies} max={10} size="xl" />
                     </div>
                     <div className="mt-2">
-                      <FormattedDescription text={sqlPresentation?.statement || contentPresentation.statement} />
+                      <FormattedRichText
+                        text={sqlPresentation?.statement || contentPresentation.statement}
+                        emptyMessage="No dataset statement available for this problem yet."
+                      />
                     </div>
                     {!isSqlTrack && dsaStatementVisuals.length > 0 ? (
                       <div className="mt-3">
