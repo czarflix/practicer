@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion as Motion } from 'framer-motion'
 import {
+  BarChart3,
   Check,
+  Copy,
+  KeyRound,
   List,
+  Mail,
   Megaphone,
   MessageSquare,
   Pencil,
@@ -10,7 +14,10 @@ import {
   RefreshCcw,
   Search,
   Server,
+  Shield,
   Trash2,
+  UserPlus,
+  Users,
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -27,6 +34,7 @@ import { supabase } from '../lib/supabase'
 import { ProblemModal } from '../components/problems/ProblemModal'
 import { CustomSelect } from '../components/ui/CustomSelect'
 import { sourceLabelForProblem, TRACK_OPTIONS } from '../lib/catalog-admin'
+import { isRunnerConfigured, runnerRequest } from '../lib/assistant-client'
 
 const TABS = [
   { id: 'problems', label: 'Problems', Icon: List },
@@ -62,6 +70,44 @@ function sortPhaseChoices(rows) {
   return Array.from(unique.entries())
     .sort((a, b) => a[0] - b[0])
     .map(([phase, name]) => ({ phase, name }))
+}
+
+function normalizeAdminUserKey(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32)
+}
+
+function deriveAdminUserKey({ displayName, email }) {
+  const fromName = normalizeAdminUserKey(displayName)
+  if (fromName) {
+    return fromName
+  }
+
+  return normalizeAdminUserKey(String(email || '').split('@')[0])
+}
+
+function buildGeneratedPassword(length = 16) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%'
+  const values = typeof crypto !== 'undefined' && crypto.getRandomValues ? crypto.getRandomValues(new Uint32Array(length)) : null
+  let password = ''
+  for (let index = 0; index < length; index += 1) {
+    const seed = values ? values[index] : Math.floor(Math.random() * alphabet.length * 1000)
+    password += alphabet[seed % alphabet.length]
+  }
+  return password
+}
+
+async function copyText(value) {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+    throw new Error('Clipboard is unavailable in this browser.')
+  }
+
+  await navigator.clipboard.writeText(String(value || ''))
 }
 
 /* ── Mini bar chart ──────────────────────────────────────────── */
@@ -809,12 +855,26 @@ function AnnouncementsTab({ userKey }) {
 /* ────────────────────────────────────────────────────────────── */
 function SystemTab() {
   const { activeTrackKey } = useCurrentUser()
+  const [activeSection, setActiveSection] = useState('overview')
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [userProgress, setUserProgress] = useState([])
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [loadingProgress, setLoadingProgress] = useState(false)
   const [globalStats, setGlobalStats] = useState({ comments: 0, solutions: 0, notes: 0 })
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [createSuccess, setCreateSuccess] = useState(null)
+  const [copiedField, setCopiedField] = useState('')
+  const [userKeyEdited, setUserKeyEdited] = useState(false)
+  const [createForm, setCreateForm] = useState(() => ({
+    displayName: '',
+    email: '',
+    userKey: '',
+    password: buildGeneratedPassword(),
+    isAdmin: false,
+  }))
+  const runnerConfigured = isRunnerConfigured()
 
   const problemsState = useProblems()
   const allFlat = useMemo(
@@ -823,26 +883,40 @@ function SystemTab() {
   )
   const totalProblems = allFlat.length
 
-  useEffect(() => {
+  const loadUsers = useCallback(async (preferredUserKey = null) => {
     if (!supabase) return
     setLoadingUsers(true)
-    const go = async () => {
-      try {
-        const [u, c, s, n] = await Promise.all([
-          supabase.from('app_users').select('*').neq('user_key', 'SYSTEM').order('created_at'),
-          supabase.from('problem_comments').select('id', { count: 'exact', head: true }),
-          supabase.from('shared_solutions').select('id', { count: 'exact', head: true }),
-          supabase.from('shared_notes').select('id', { count: 'exact', head: true }),
-        ])
-        const list = u.data ?? []
-        setUsers(list)
-        setGlobalStats({ comments: c.count ?? 0, solutions: s.count ?? 0, notes: n.count ?? 0 })
-        if (list.length > 0) setSelectedUser(list[0].user_key)
-      } catch { /* */ }
-      finally { setLoadingUsers(false) }
+    try {
+      const [u, c, s, n] = await Promise.all([
+        supabase.from('app_users').select('*').neq('user_key', 'SYSTEM').order('created_at'),
+        supabase.from('problem_comments').select('id', { count: 'exact', head: true }),
+        supabase.from('shared_solutions').select('id', { count: 'exact', head: true }),
+        supabase.from('shared_notes').select('id', { count: 'exact', head: true }),
+      ])
+
+      const list = u.data ?? []
+      setUsers(list)
+      setGlobalStats({ comments: c.count ?? 0, solutions: s.count ?? 0, notes: n.count ?? 0 })
+      setSelectedUser((current) => {
+        const requested = preferredUserKey && list.some((item) => item.user_key === preferredUserKey) ? preferredUserKey : null
+        if (requested) {
+          return requested
+        }
+        if (current && list.some((item) => item.user_key === current)) {
+          return current
+        }
+        return list[0]?.user_key ?? null
+      })
+    } catch {
+      setUsers([])
+    } finally {
+      setLoadingUsers(false)
     }
-    void go()
   }, [])
+
+  useEffect(() => {
+    void loadUsers()
+  }, [loadUsers])
 
   useEffect(() => {
     if (!supabase || !selectedUser) return
@@ -853,6 +927,17 @@ function SystemTab() {
     }
     void go()
   }, [selectedUser])
+
+  useEffect(() => {
+    if (userKeyEdited) {
+      return
+    }
+
+    setCreateForm((current) => ({
+      ...current,
+      userKey: deriveAdminUserKey({ displayName: current.displayName, email: current.email }),
+    }))
+  }, [createForm.displayName, createForm.email, userKeyEdited])
 
   const problemsByIdentity = useMemo(() => {
     const map = new Map()
@@ -910,40 +995,163 @@ function SystemTab() {
   }, [filteredUserProgress, problemsByIdentity, allFlat, totalProblems])
 
   const selectedUserObj = users.find((u) => u.user_key === selectedUser)
+  const adminCount = users.filter((u) => u.is_admin).length
+  const mappedCount = users.filter((u) => Boolean(u.auth_user_id)).length
+  const attemptedCount = filteredUserProgress.filter((row) => row.status === 'attempted').length
+  const reviewCount = filteredUserProgress.filter((row) => row.status === 'review').length
 
-  return (
-    <div className="flex h-full flex-col overflow-hidden p-4">
-      {/* Row 1: header + global stats */}
-      <div className="flex items-start justify-between gap-4">
-        <h2 className="text-lg font-semibold text-text-primary">System</h2>
-        <div className="flex gap-2">
-          <StatBox label={`${activeTrackKey === 'sql' ? 'SQL' : 'DSA'} Problems`} value={totalProblems} />
-          <StatBox label="Comments" value={globalStats.comments} />
-          <StatBox label="Solutions" value={globalStats.solutions} />
-          <StatBox label="Notes" value={globalStats.notes} />
+  const recentActivity = useMemo(
+    () =>
+      [...filteredUserProgress]
+        .filter((row) => row.status === 'solved' && row.solved_at)
+        .sort((left, right) => new Date(right.solved_at).getTime() - new Date(left.solved_at).getTime())
+        .slice(0, 6),
+    [filteredUserProgress],
+  )
+
+  const resetCreateForm = useCallback(() => {
+    setCreateForm({
+      displayName: '',
+      email: '',
+      userKey: '',
+      password: buildGeneratedPassword(),
+      isAdmin: false,
+    })
+    setUserKeyEdited(false)
+    setCreateError('')
+  }, [])
+
+  const handleCopy = useCallback(async (value, token) => {
+    try {
+      await copyText(value)
+      setCopiedField(token)
+      window.setTimeout(() => setCopiedField((current) => (current === token ? '' : current)), 1800)
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'Copy failed.')
+    }
+  }, [])
+
+  const handleCreateUser = useCallback(async () => {
+    if (!runnerConfigured) {
+      setCreateError('Runner service is not configured. Set VITE_RUNNER_API_URL before creating users.')
+      return
+    }
+
+    if (!createForm.displayName.trim() || !createForm.email.trim() || !createForm.userKey.trim() || !createForm.password.trim()) {
+      setCreateError('Display name, email, user key, and password are required.')
+      return
+    }
+
+    setCreateBusy(true)
+    setCreateError('')
+    setCreateSuccess(null)
+
+    try {
+      const payload = await runnerRequest('/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          display_name: createForm.displayName.trim(),
+          email: createForm.email.trim().toLowerCase(),
+          user_key: normalizeAdminUserKey(createForm.userKey),
+          password: createForm.password,
+          is_admin: createForm.isAdmin,
+        }),
+      })
+
+      setCreateSuccess({
+        ...payload.user,
+        password: payload?.credential?.password || createForm.password,
+        generatedPassword: Boolean(payload?.credential?.generated),
+      })
+      await loadUsers(payload?.user?.user_key || null)
+      resetCreateForm()
+    } catch (error) {
+      if (error?.status === 404) {
+        setCreateError(
+          'Runner is outdated or not deployed with admin user creation. Deploy the latest runner-service or point VITE_RUNNER_API_URL to localhost:8787.',
+        )
+      } else {
+        setCreateError(error instanceof Error ? error.message : 'Failed to create user.')
+      }
+    } finally {
+      setCreateBusy(false)
+    }
+  }, [createForm, loadUsers, resetCreateForm, runnerConfigured])
+
+  const subNavItems = [
+    {
+      id: 'overview',
+      label: 'Overview',
+      caption: 'Track progress and activity',
+      Icon: BarChart3,
+    },
+    {
+      id: 'directory',
+      label: 'Directory',
+      caption: `${users.length} accounts`,
+      Icon: Users,
+    },
+    {
+      id: 'create',
+      label: 'Create User',
+      caption: 'Provision new access',
+      Icon: UserPlus,
+    },
+  ]
+
+  const renderUserSummary = () => (
+    <div className="mt-3 grid grid-cols-5 gap-2">
+      <StatBox label="Users" value={users.length} accent />
+      <StatBox label="Mapped Auth" value={mappedCount} />
+      <StatBox label="Admins" value={adminCount} />
+      <StatBox label="Comments" value={globalStats.comments} />
+      <StatBox label="Shared" value={globalStats.notes + globalStats.solutions} />
+    </div>
+  )
+
+  const renderOverview = () => (
+    <>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-border-subtle bg-surface px-3 py-3">
+        <div className="min-w-[220px]">
+          <Label>Focus User</Label>
+          <div className="mt-2 flex items-center gap-3">
+            {loadingUsers ? (
+              <span className="text-xs text-text-muted">Loading users…</span>
+            ) : (
+              <div className="w-56">
+                <CustomSelect
+                  value={selectedUser || ''}
+                  onChange={(value) => setSelectedUser(value)}
+                  options={users.map((user) => ({
+                    value: user.user_key,
+                    label: `${user.display_name}${user.is_admin ? ' ★' : ''}`,
+                  }))}
+                  placeholder="Select user…"
+                />
+              </div>
+            )}
+            {selectedUserObj ? (
+              <div className="flex items-center gap-2 text-[10px] text-text-muted">
+                <Badge color={selectedUserObj.is_admin ? 'accent' : 'muted'}>
+                  {selectedUserObj.is_admin ? 'Admin' : 'User'}
+                </Badge>
+                <span>{selectedUserObj.user_key}</span>
+                <span>{selectedUserObj.auth_user_id ? 'Linked auth' : 'Needs auth mapping'}</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="grid min-w-[280px] grid-cols-3 gap-2">
+          <StatBox label="Solved" value={a.solved} accent />
+          <StatBox label="Attempted" value={attemptedCount} />
+          <StatBox label="Review" value={reviewCount} />
         </div>
       </div>
 
-      {/* Row 2: user selector */}
-      <div className="mt-3 flex items-center gap-3">
-        <Label>User</Label>
-        {loadingUsers ? <span className="text-xs text-text-muted">Loading…</span> : (
-          <div className="w-48">
-            <CustomSelect
-              value={selectedUser || ''}
-              onChange={(v) => setSelectedUser(v)}
-              options={users.map((u) => ({ value: u.user_key, label: `${u.display_name}${u.is_admin ? ' ★' : ''}` }))}
-              placeholder="Select user…"
-            />
-          </div>
-        )}
-        {selectedUserObj ? <span className="text-[10px] text-text-muted">{selectedUserObj.is_admin ? 'Admin' : 'User'} · {selectedUserObj.user_key}</span> : null}
-      </div>
-
-      {/* Row 3: dashboard grid — compact, all in one view */}
-      {loadingProgress ? <p className="mt-4 text-center text-xs text-text-muted">Loading…</p> : (
-        <div className="mt-3 min-h-0 flex-1 grid grid-cols-3 grid-rows-[auto_1fr_1fr] gap-2 overflow-hidden">
-          {/* Stats strip */}
+      {loadingProgress ? (
+        <p className="mt-4 text-center text-xs text-text-muted">Loading…</p>
+      ) : (
+        <div className="mt-3 grid min-h-0 flex-1 grid-cols-3 grid-rows-[auto_1fr_1fr] gap-2 overflow-hidden">
           <div className="col-span-3 grid grid-cols-5 gap-2">
             <StatBox label="Solved" value={a.solved} accent />
             <StatBox label="Attempted" value={a.attempted} />
@@ -952,44 +1160,51 @@ function SystemTab() {
             <StatBox label="Completion" value={`${a.pct}%`} accent />
           </div>
 
-          {/* Difficulty chart */}
-          <div className="border border-border-subtle bg-surface p-2 flex flex-col">
+          <div className="flex flex-col border border-border-subtle bg-surface p-2">
             <Label>Difficulty</Label>
-            <div className="flex-1 mt-1">
-              <MiniBar data={[{ label: 'Easy', value: a.diff.Easy }, { label: 'Med', value: a.diff.Medium }, { label: 'Hard', value: a.diff.Hard }]} colors={{ Easy: '#22c55e', Med: '#f59e0b', Hard: '#ef4444' }} height={80} />
+            <div className="mt-1 flex-1">
+              <MiniBar
+                data={[
+                  { label: 'Easy', value: a.diff.Easy },
+                  { label: 'Med', value: a.diff.Medium },
+                  { label: 'Hard', value: a.diff.Hard },
+                ]}
+                colors={{ Easy: '#22c55e', Med: '#f59e0b', Hard: '#ef4444' }}
+              />
             </div>
           </div>
 
-          {/* Velocity chart */}
-          <div className="col-span-2 border border-border-subtle bg-surface p-2 flex flex-col">
+          <div className="col-span-2 flex flex-col border border-border-subtle bg-surface p-2">
             <Label>14-Day Velocity</Label>
-            <div className="flex-1 mt-1">
-              <MiniBar data={a.vel} height={80} />
+            <div className="mt-1 flex-1">
+              <MiniBar data={a.vel} />
             </div>
           </div>
 
-          {/* Tier progress */}
-          <div className="border border-border-subtle bg-surface p-2 flex flex-col">
+          <div className="flex flex-col border border-border-subtle bg-surface p-2">
             <Label>Tiers</Label>
-            <div className="flex-1 mt-1 space-y-1.5 flex flex-col justify-center">
-              {[1, 2, 3].map((t) => <ThinBar key={t} label={`Tier ${t}`} value={a.tier[t].s} max={a.tier[t].t} />)}
+            <div className="mt-1 flex flex-1 flex-col justify-center space-y-1.5">
+              {[1, 2, 3].map((tierValue) => (
+                <ThinBar key={tierValue} label={`Tier ${tierValue}`} value={a.tier[tierValue].s} max={a.tier[tierValue].t} />
+              ))}
             </div>
           </div>
 
-          {/* Recent solves */}
-          <div className="col-span-2 border border-border-subtle bg-surface p-2 flex flex-col overflow-hidden">
+          <div className="col-span-2 flex flex-col overflow-hidden border border-border-subtle bg-surface p-2">
             <Label>Recent Solves</Label>
-            <div className="flex-1 mt-1 overflow-y-auto space-y-0.5">
-              {a.recent.length === 0 ? <p className="text-[10px] text-text-muted py-2">No solves yet.</p> : null}
-              {a.recent.map((s) => {
-                const m = problemsByIdentity.get(problemIdentityKey(s.problem_key ?? s.problem_lc))
-                const problemIdentity = m?.problemKey || s.problem_key || s.problem_lc
+            <div className="mt-1 flex-1 space-y-0.5 overflow-y-auto">
+              {a.recent.length === 0 ? <p className="py-2 text-[10px] text-text-muted">No solves yet.</p> : null}
+              {a.recent.map((solve) => {
+                const match = problemsByIdentity.get(problemIdentityKey(solve.problem_key ?? solve.problem_lc))
+                const problemIdentity = match?.problemKey || solve.problem_key || solve.problem_lc
                 return (
-                  <div key={problemIdentity} className="flex items-center justify-between text-[11px] py-0.5">
-                    <Link to={problemUrl(problemIdentity, m?.title || '')} className="truncate text-text-primary hover:text-accent">
-                      {m ? m.title : problemIdentity || `LC#${s.problem_lc}`}
+                  <div key={problemIdentity} className="flex items-center justify-between py-0.5 text-[11px]">
+                    <Link to={problemUrl(problemIdentity, match?.title || '')} className="truncate text-text-primary hover:text-accent">
+                      {match ? match.title : problemIdentity || `LC#${solve.problem_lc}`}
                     </Link>
-                    <span className="shrink-0 ml-2 text-[10px] text-text-muted">{s.solved_at ? new Date(s.solved_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
+                    <span className="ml-2 shrink-0 text-[10px] text-text-muted">
+                      {solve.solved_at ? new Date(solve.solved_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+                    </span>
                   </div>
                 )
               })}
@@ -997,6 +1212,394 @@ function SystemTab() {
           </div>
         </div>
       )}
+    </>
+  )
+
+  const renderDirectory = () => (
+    <div className="mt-3 grid min-h-0 flex-1 grid-cols-[minmax(320px,1.05fr)_minmax(0,1fr)] gap-3 overflow-hidden">
+      <div className="flex min-h-0 flex-col border border-border-subtle bg-surface">
+        <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+          <div>
+            <Label>User Directory</Label>
+            <p className="mt-1 text-sm text-text-primary">{users.length} accounts across Practicer</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSection('create')}
+            className="h-8 border border-accent bg-accent/10 px-3 text-xs font-medium text-accent hover:bg-accent/20"
+          >
+            <UserPlus size={12} className="mr-1 inline" />
+            New User
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {loadingUsers ? <p className="py-8 text-center text-xs text-text-muted">Loading users…</p> : null}
+          {!loadingUsers && users.length === 0 ? <p className="py-8 text-center text-xs text-text-muted">No users found.</p> : null}
+          <div className="space-y-1">
+            {users.map((user) => {
+              const isSelected = selectedUser === user.user_key
+              return (
+                <button
+                  key={user.user_key}
+                  type="button"
+                  onClick={() => setSelectedUser(user.user_key)}
+                  className={[
+                    'w-full border px-3 py-3 text-left transition-colors',
+                    isSelected
+                      ? 'border-accent/40 bg-accent/10'
+                      : 'border-border-subtle bg-base hover:border-accent/20 hover:bg-surface-hover',
+                  ].join(' ')}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-text-primary">{user.display_name}</p>
+                      <p className="mt-0.5 text-[11px] text-text-muted">{user.user_key}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {user.is_admin ? <Badge>Admin</Badge> : <Badge color="muted">User</Badge>}
+                      <Badge color={user.auth_user_id ? 'accent' : 'muted'}>
+                        {user.auth_user_id ? 'Linked' : 'Pending'}
+                      </Badge>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
+        <div className="border border-border-subtle bg-surface px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <Label>Selected User</Label>
+              <p className="mt-1 text-lg font-semibold text-text-primary">
+                {selectedUserObj ? selectedUserObj.display_name : 'No user selected'}
+              </p>
+              {selectedUserObj ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+                  <Badge color={selectedUserObj.is_admin ? 'accent' : 'muted'}>
+                    {selectedUserObj.is_admin ? 'Admin' : 'Standard'}
+                  </Badge>
+                  <span>{selectedUserObj.user_key}</span>
+                  <span>{selectedUserObj.auth_user_id ? 'Auth linked' : 'Awaiting auth mapping'}</span>
+                </div>
+              ) : null}
+            </div>
+            <div className="grid min-w-[220px] grid-cols-3 gap-2">
+              <StatBox label="Solved" value={a.solved} accent />
+              <StatBox label="Attempted" value={attemptedCount} />
+              <StatBox label="Review" value={reviewCount} />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_280px] gap-3 overflow-hidden">
+          <div className="flex min-h-0 flex-col border border-border-subtle bg-surface p-3">
+            <Label>Recent Track Activity</Label>
+            <div className="mt-3 flex-1 space-y-2 overflow-y-auto">
+              {recentActivity.length === 0 ? <p className="py-8 text-center text-xs text-text-muted">No recent solves on this track.</p> : null}
+              {recentActivity.map((row) => {
+                const match = problemsByIdentity.get(problemIdentityKey(row.problem_key ?? row.problem_lc))
+                const problemIdentity = match?.problemKey || row.problem_key || row.problem_lc
+                return (
+                  <div key={`${problemIdentity}-${row.solved_at || 'pending'}`} className="border border-border-subtle bg-base px-3 py-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <Link to={problemUrl(problemIdentity, match?.title || '')} className="truncate text-sm text-text-primary hover:text-accent">
+                          {match?.title || problemIdentity || `LC#${row.problem_lc}`}
+                        </Link>
+                        <p className="mt-1 text-[11px] text-text-muted">
+                          {match?.difficulty || '—'} · {row.status}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-[10px] text-text-muted">
+                        {row.solved_at ? new Date(row.solved_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <div className="border border-border-subtle bg-surface p-3">
+              <Label>Completion</Label>
+              <div className="mt-3 space-y-2">
+                <ThinBar label="Solved" value={a.solved} max={totalProblems} color="#22c55e" />
+                <ThinBar label="Attempted" value={attemptedCount} max={totalProblems} color="#f59e0b" />
+                <ThinBar label="Review" value={reviewCount} max={totalProblems} color="#38bdf8" />
+              </div>
+            </div>
+            <div className="border border-border-subtle bg-surface p-3">
+              <Label>Difficulty Wins</Label>
+              <div className="mt-3 space-y-2">
+                <ThinBar label="Easy" value={a.diff.Easy} max={Math.max(a.solved, 1)} color="#22c55e" />
+                <ThinBar label="Medium" value={a.diff.Medium} max={Math.max(a.solved, 1)} color="#f59e0b" />
+                <ThinBar label="Hard" value={a.diff.Hard} max={Math.max(a.solved, 1)} color="#ef4444" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderCreate = () => (
+    <div className="mt-3 grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-3 overflow-hidden">
+      <div className="flex flex-col gap-3">
+        <div className="border border-border-subtle bg-surface p-4">
+          <div className="flex items-center gap-2">
+            <Shield size={14} className="text-accent" />
+            <Label>Provisioning Flow</Label>
+          </div>
+          <div className="mt-3 space-y-3 text-[11px] leading-5 text-text-muted">
+            <p>The admin panel now creates the Supabase Auth account and the mapped `app_users` row in one action.</p>
+            <p>Use a temporary password, send it once, and ask the user to rotate it after first sign-in.</p>
+            <p>User keys are auto-shaped to the uppercase format the app already uses, but you can override before submit.</p>
+          </div>
+        </div>
+
+        <div className={`border p-4 ${runnerConfigured ? 'border-accent/30 bg-accent/5' : 'border-amber-500/30 bg-amber-500/10'}`}>
+          <Label>{runnerConfigured ? 'Runner Ready' : 'Runner Required'}</Label>
+          <p className={`mt-2 text-xs ${runnerConfigured ? 'text-text-primary' : 'text-amber-300'}`}>
+            {runnerConfigured
+              ? 'Secure admin creation is available because the runner API is configured for authenticated requests.'
+              : 'Set VITE_RUNNER_API_URL before using this form. Auth user creation is intentionally blocked from the browser-only client.'}
+          </p>
+        </div>
+
+        {createSuccess ? (
+          <div className="border border-accent/30 bg-accent/5 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label>User Created</Label>
+                <p className="mt-1 text-sm font-medium text-text-primary">{createSuccess.display_name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSection('directory')}
+                className="h-8 border border-accent px-3 text-[11px] font-medium text-accent hover:bg-accent/10"
+              >
+                View in Directory
+              </button>
+            </div>
+            <div className="mt-3 space-y-2 text-[11px]">
+              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
+                <span className="text-text-muted">Email</span>
+                <button type="button" onClick={() => void handleCopy(createSuccess.email, 'success-email')} className="font-mono text-text-primary hover:text-accent">
+                  {createSuccess.email}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
+                <span className="text-text-muted">User Key</span>
+                <button type="button" onClick={() => void handleCopy(createSuccess.user_key, 'success-user-key')} className="font-mono text-text-primary hover:text-accent">
+                  {createSuccess.user_key}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
+                <span className="text-text-muted">Password</span>
+                <button type="button" onClick={() => void handleCopy(createSuccess.password, 'success-password')} className="font-mono text-text-primary hover:text-accent">
+                  {createSuccess.password}
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-[10px] text-text-muted">
+              {copiedField ? 'Copied to clipboard.' : createSuccess.generatedPassword ? 'Generated password shown once. Copy it before leaving this screen.' : 'Password echoed from the submitted form for handoff.'}
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="overflow-y-auto">
+        <div className="border border-border-subtle bg-surface p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-semibold text-text-primary">Create a new user</h3>
+              <p className="mt-1 text-xs text-text-muted">A single submit creates the auth login and links it to Practicer.</p>
+            </div>
+            <button
+              type="button"
+              onClick={resetCreateForm}
+              className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <label className="block">
+              <Label>Display Name</Label>
+              <input
+                type="text"
+                value={createForm.displayName}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setCreateForm((current) => ({ ...current, displayName: value }))
+                }}
+                placeholder="Ayan Kapoor"
+                className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 text-sm text-text-primary outline-none focus:border-accent"
+              />
+            </label>
+
+            <label className="block">
+              <Label>Email</Label>
+              <div className="relative mt-2">
+                <Mail size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <input
+                  type="email"
+                  value={createForm.email}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setCreateForm((current) => ({ ...current, email: value }))
+                  }}
+                  placeholder="name@example.com"
+                  className="h-10 w-full border border-border-subtle bg-base pl-10 pr-3 text-sm text-text-primary outline-none focus:border-accent"
+                />
+              </div>
+            </label>
+
+            <label className="block">
+              <Label>User Key</Label>
+              <input
+                type="text"
+                value={createForm.userKey}
+                onChange={(event) => {
+                  setUserKeyEdited(true)
+                  setCreateForm((current) => ({ ...current, userKey: normalizeAdminUserKey(event.target.value) }))
+                }}
+                placeholder="AYAN"
+                className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 font-mono text-sm uppercase text-text-primary outline-none focus:border-accent"
+              />
+              <p className="mt-1 text-[10px] text-text-muted">Auto-generated from display name or email until you edit it.</p>
+            </label>
+
+            <div className="block">
+              <Label>Access Level</Label>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {[
+                  { value: false, label: 'Standard', hint: 'Learner access' },
+                  { value: true, label: 'Admin', hint: 'Can open admin routes' },
+                ].map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => setCreateForm((current) => ({ ...current, isAdmin: option.value }))}
+                    className={[
+                      'border px-3 py-3 text-left transition-colors',
+                      createForm.isAdmin === option.value
+                        ? 'border-accent/40 bg-accent/10'
+                        : 'border-border-subtle bg-base hover:border-accent/20 hover:bg-surface-hover',
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Shield size={13} className={createForm.isAdmin === option.value ? 'text-accent' : 'text-text-muted'} />
+                      <span className="text-sm font-medium text-text-primary">{option.label}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-text-muted">{option.hint}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 border border-border-subtle bg-base p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <KeyRound size={14} className="text-accent" />
+                <div>
+                  <Label>Temporary Password</Label>
+                  <p className="mt-1 text-[11px] text-text-muted">Generate a strong starter password, then share it once.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateForm((current) => ({ ...current, password: buildGeneratedPassword() }))}
+                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+                >
+                  Generate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopy(createForm.password, 'draft-password')}
+                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+                >
+                  <Copy size={11} className="mr-1 inline" />
+                  {copiedField === 'draft-password' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <input
+              type="text"
+              value={createForm.password}
+              onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
+              className="mt-3 h-10 w-full border border-border-subtle bg-surface px-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+            />
+          </div>
+
+          {createError ? <p className="mt-4 text-[11px] text-red-400">{createError}</p> : null}
+
+          <div className="mt-5 flex items-center justify-between gap-3">
+            <p className="text-[11px] text-text-muted">
+              The form submits through the runner with your current admin session, so auth creation never happens in the browser directly.
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleCreateUser()}
+              disabled={createBusy || !runnerConfigured}
+              className="h-10 border border-accent bg-accent px-4 text-sm font-medium text-black hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {createBusy ? 'Creating…' : 'Create User'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">System</h2>
+          <p className="mt-1 text-[11px] text-text-muted">Global operations, user access, and track-level oversight</p>
+        </div>
+        <div className="flex gap-2">
+          <StatBox label={`${activeTrackKey === 'sql' ? 'SQL' : 'DSA'} Problems`} value={totalProblems} />
+          <StatBox label="Solutions" value={globalStats.solutions} />
+          <StatBox label="Comments" value={globalStats.comments} />
+          <StatBox label="Admins" value={adminCount} />
+        </div>
+      </div>
+      {renderUserSummary()}
+      <div className="mt-3 flex gap-2">
+        {subNavItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setActiveSection(item.id)}
+            className={[
+              'min-w-[170px] border px-3 py-2 text-left transition-colors',
+              activeSection === item.id
+                ? 'border-accent/40 bg-accent/10'
+                : 'border-border-subtle bg-surface hover:border-accent/20 hover:bg-surface-hover',
+            ].join(' ')}
+          >
+            <div className="flex items-center gap-2">
+              <item.Icon size={13} className={activeSection === item.id ? 'text-accent' : 'text-text-muted'} />
+              <span className="text-sm font-medium text-text-primary">{item.label}</span>
+            </div>
+            <p className="mt-1 text-[10px] text-text-muted">{item.caption}</p>
+          </button>
+        ))}
+      </div>
+
+      {activeSection === 'overview' ? renderOverview() : null}
+      {activeSection === 'directory' ? renderDirectory() : null}
+      {activeSection === 'create' ? renderCreate() : null}
     </div>
   )
 }

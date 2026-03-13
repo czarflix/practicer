@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { USER_OPTIONS, normalizeUserKey } from './user-options'
 import { UserStoreContext } from './user-store'
 import { supabase, hasSupabaseCredentials } from '../lib/supabase'
+import { normalizeSupabaseSessionError } from '../lib/supabase-session'
 
 const LOCAL_STORAGE_KEY = 'dsa-active-user'
 const LOCAL_TRACK_STORAGE_KEY = 'dsa-active-track'
@@ -22,6 +23,22 @@ function persistTrackKey(value) {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(LOCAL_TRACK_STORAGE_KEY, normalizeTrackKey(value))
   }
+}
+
+function resetAuthState({
+  setSession,
+  setUserKeyState,
+  setIsAdmin,
+  setActiveTrackKeyState,
+  sessionUserIdRef,
+}) {
+  const fallbackTrack = readStoredTrackKey()
+  sessionUserIdRef.current = null
+  setSession(null)
+  setUserKeyState(null)
+  setIsAdmin(false)
+  setActiveTrackKeyState(fallbackTrack)
+  persistTrackKey(fallbackTrack)
 }
 
 // ─── Auth-aware provider (used when Supabase credentials are present) ─────────
@@ -98,15 +115,39 @@ function AuthUserProvider({ children }) {
   useEffect(() => {
     let isActive = true
 
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
-      if (!isActive) {
-        return
+    const bootstrapSession = async () => {
+      try {
+        const sessionResult = await supabase.auth.getSession()
+        if (sessionResult?.error) {
+          throw sessionResult.error
+        }
+
+        if (!isActive) {
+          return
+        }
+
+        const initialSession = sessionResult?.data?.session ?? null
+        sessionUserIdRef.current = initialSession?.user?.id ?? null
+        setSession(initialSession)
+        void resolveUserKey(initialSession)
+      } catch (error) {
+        const normalizedError = await normalizeSupabaseSessionError(error, supabase)
+        if (!isActive) {
+          return
+        }
+
+        console.error('[UserContext] getSession error:', normalizedError.message)
+        resetAuthState({
+          setSession,
+          setUserKeyState,
+          setIsAdmin,
+          setActiveTrackKeyState,
+          sessionUserIdRef,
+        })
       }
-      sessionUserIdRef.current = initialSession?.user?.id ?? null
-      setSession(initialSession)
-      void resolveUserKey(initialSession)
-    })
+    }
+
+    void bootstrapSession()
 
     // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
@@ -120,7 +161,13 @@ function AuthUserProvider({ children }) {
       setSession(nextSession)
 
       if (!nextUserId) {
-        setUserKeyState(null)
+        resetAuthState({
+          setSession,
+          setUserKeyState,
+          setIsAdmin,
+          setActiveTrackKeyState,
+          sessionUserIdRef,
+        })
         return
       }
 

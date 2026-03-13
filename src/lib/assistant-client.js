@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { normalizeSupabaseSessionError } from './supabase-session'
 
 function trimBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
@@ -35,14 +36,30 @@ function parseJsonSafely(text) {
   }
 }
 
+function createRunnerRequestError(message, extra = {}) {
+  const error = new Error(message)
+  error.name = 'RunnerRequestError'
+  Object.assign(error, extra)
+  return error
+}
+
 async function getAccessToken() {
   if (!supabase) {
     throw new Error('Supabase is required for the AI assistant.')
   }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  let sessionResult
+  try {
+    sessionResult = await supabase.auth.getSession()
+  } catch (error) {
+    throw await normalizeSupabaseSessionError(error, supabase)
+  }
+
+  if (sessionResult?.error) {
+    throw await normalizeSupabaseSessionError(sessionResult.error, supabase)
+  }
+
+  const session = sessionResult?.data?.session ?? null
 
   const accessToken = String(session?.access_token || '').trim()
   if (!accessToken) {
@@ -52,13 +69,20 @@ async function getAccessToken() {
   return accessToken
 }
 
-export function isAssistantConfigured() {
+export function isRunnerConfigured() {
   return Boolean(assistantRunnerBaseUrl)
 }
 
-export async function assistantRequest(path, options = {}) {
+export function isAssistantConfigured() {
+  return isRunnerConfigured()
+}
+
+export async function runnerRequest(path, options = {}) {
   if (!assistantRunnerBaseUrl) {
-    throw new Error('Runner service is not configured. Set VITE_RUNNER_API_URL.')
+    throw createRunnerRequestError('Runner service is not configured. Set VITE_RUNNER_API_URL.', {
+      path,
+      status: null,
+    })
   }
 
   const accessToken = await getAccessToken()
@@ -75,22 +99,37 @@ export async function assistantRequest(path, options = {}) {
       },
     })
   } catch (error) {
-    throw new Error(normalizeAssistantNetworkError(error))
+    throw createRunnerRequestError(normalizeAssistantNetworkError(error), {
+      path,
+      status: null,
+      cause: error,
+    })
   }
 
   const text = await response.text()
   const payload = parseJsonSafely(text)
 
   if (!response.ok) {
-    throw new Error(payload?.error || text || `Assistant request failed (${response.status}).`)
+    throw createRunnerRequestError(payload?.error || text || `Runner request failed (${response.status}).`, {
+      path,
+      status: response.status,
+      payload,
+    })
   }
 
   return payload
 }
 
+export async function assistantRequest(path, options = {}) {
+  return runnerRequest(path, options)
+}
+
 export async function assistantStream(path, body, handlers, options = {}) {
   if (!assistantRunnerBaseUrl) {
-    throw new Error('Runner service is not configured. Set VITE_RUNNER_API_URL.')
+    throw createRunnerRequestError('Runner service is not configured. Set VITE_RUNNER_API_URL.', {
+      path,
+      status: null,
+    })
   }
 
   const accessToken = await getAccessToken()
@@ -107,13 +146,21 @@ export async function assistantStream(path, body, handlers, options = {}) {
       body: JSON.stringify(body),
     })
   } catch (error) {
-    throw new Error(normalizeAssistantNetworkError(error))
+    throw createRunnerRequestError(normalizeAssistantNetworkError(error), {
+      path,
+      status: null,
+      cause: error,
+    })
   }
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => '')
     const payload = parseJsonSafely(text)
-    throw new Error(payload?.error || text || `Assistant stream failed (${response.status}).`)
+    throw createRunnerRequestError(payload?.error || text || `Assistant stream failed (${response.status}).`, {
+      path,
+      status: response.status,
+      payload,
+    })
   }
 
   const decoder = new TextDecoder()
@@ -160,6 +207,10 @@ export async function assistantStream(path, body, handlers, options = {}) {
   }
 
   if (streamError) {
-    throw new Error(streamError.error || 'Assistant stream failed.')
+    throw createRunnerRequestError(streamError.error || 'Assistant stream failed.', {
+      path,
+      status: null,
+      payload: streamError,
+    })
   }
 }

@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { randomBytes } from 'node:crypto'
 import process from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import {
@@ -103,6 +104,60 @@ function statusFromHarness(value) {
     return normalized
   }
   return 'error'
+}
+
+function normalizeUserKey(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32)
+}
+
+function deriveUserKey(displayName, email) {
+  return normalizeUserKey(displayName) || normalizeUserKey(String(email || '').split('@')[0])
+}
+
+function normalizeDisplayName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 80)
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
+}
+
+function buildTemporaryPassword(length = 18) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
+  const bytes = randomBytes(length)
+  let password = ''
+  for (let index = 0; index < length; index += 1) {
+    password += alphabet[bytes[index] % alphabet.length]
+  }
+  return password
+}
+
+function statusCodeForUserProvisionError(error) {
+  const source = String(error?.message || error?.error_description || error?.details || '').toLowerCase()
+  if (
+    /already registered|already exists|duplicate|unique|violates unique constraint|23505/.test(source)
+  ) {
+    return 409
+  }
+
+  if (/invalid email|password/.test(source)) {
+    return 400
+  }
+
+  return 500
 }
 
 function looksLikeGenericCaseValue(value) {
@@ -784,6 +839,136 @@ async function requireAssistantAuth(req, res) {
   }
 }
 
+async function requireAdminAuth(req, res) {
+  const auth = await requireAssistantAuth(req, res)
+  if (!auth) {
+    return null
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('app_users')
+      .select('is_admin')
+      .eq('user_key', auth.userKey)
+      .maybeSingle()
+
+    if (error) {
+      throw error
+    }
+
+    if (!data?.is_admin) {
+      sendError(req, res, 403, 'Admin access is required.')
+      return null
+    }
+
+    return auth
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to verify admin access.')
+    return null
+  }
+}
+
+async function handleAdminUserCreate(req, res) {
+  const auth = await requireAdminAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  let body
+  try {
+    body = await readJsonBody(req)
+  } catch (error) {
+    sendError(req, res, 400, error instanceof Error ? error.message : 'Invalid request body.')
+    return
+  }
+
+  const email = normalizeEmail(body?.email)
+  const displayName = normalizeDisplayName(body?.display_name)
+  const userKey = normalizeUserKey(body?.user_key) || deriveUserKey(displayName, email)
+  const password = String(body?.password || '').trim() || buildTemporaryPassword()
+  const isAdmin = body?.is_admin === true
+
+  if (!email || !isValidEmail(email)) {
+    sendError(req, res, 400, 'A valid email is required.')
+    return
+  }
+
+  if (!displayName) {
+    sendError(req, res, 400, 'display_name is required.')
+    return
+  }
+
+  if (!userKey || userKey.length < 2) {
+    sendError(req, res, 400, 'user_key must contain at least 2 letters or numbers.')
+    return
+  }
+
+  if (password.length < 8) {
+    sendError(req, res, 400, 'password must be at least 8 characters.')
+    return
+  }
+
+  let createdAuthUserId = null
+
+  try {
+    const { data: authResult, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        display_name: displayName,
+        user_key: userKey,
+      },
+      app_metadata: {
+        practicer_role: isAdmin ? 'admin' : 'user',
+      },
+    })
+
+    if (authError || !authResult?.user?.id) {
+      const statusCode = statusCodeForUserProvisionError(authError)
+      sendError(req, res, statusCode, authError?.message || 'Failed to create auth user.')
+      return
+    }
+
+    createdAuthUserId = authResult.user.id
+
+    const { data: appUser, error: appUserError } = await supabase
+      .from('app_users')
+      .insert({
+        user_key: userKey,
+        display_name: displayName,
+        is_admin: isAdmin,
+        auth_user_id: createdAuthUserId,
+      })
+      .select('user_key,display_name,is_admin,auth_user_id,created_at')
+      .single()
+
+    if (appUserError || !appUser) {
+      throw appUserError || new Error('Failed to persist app user mapping.')
+    }
+
+    sendJson(req, res, 201, {
+      user: {
+        ...appUser,
+        email,
+      },
+      credential: {
+        email,
+        password,
+        generated: !String(body?.password || '').trim(),
+      },
+      created_by: auth.userKey,
+    })
+  } catch (error) {
+    if (createdAuthUserId) {
+      await supabase.auth.admin.deleteUser(createdAuthUserId).catch(() => undefined)
+    }
+
+    const statusCode = statusCodeForUserProvisionError(error)
+    sendError(req, res, statusCode, error instanceof Error ? error.message : 'Failed to create user.')
+  }
+}
+
 async function handleAssistantThreadsList(req, res, url) {
   const auth = await requireAssistantAuth(req, res)
   if (!auth) {
@@ -1043,6 +1228,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/assistant/credentials') {
     await handleAssistantCredentialsSave(req, res)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/admin/users') {
+    await handleAdminUserCreate(req, res)
     return
   }
 
