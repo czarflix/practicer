@@ -1110,7 +1110,7 @@ function SystemTab() {
     setDeleteSuccess('')
 
     try {
-      const payload = await runnerRequest(`/admin/users/${encodeURIComponent(selectedUserObj.user_key)}`, {
+      await runnerRequest(`/admin/users/${encodeURIComponent(selectedUserObj.user_key)}`, {
         method: 'DELETE',
       })
 
