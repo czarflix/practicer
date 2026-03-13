@@ -9,6 +9,7 @@ import {
   Mail,
   Megaphone,
   MessageSquare,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCcw,
@@ -868,6 +869,7 @@ function SystemTab() {
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const [deleteSuccess, setDeleteSuccess] = useState('')
+  const [deleteMenuKey, setDeleteMenuKey] = useState(null)
   const [deleteConfirmKey, setDeleteConfirmKey] = useState(null)
   const [copiedField, setCopiedField] = useState('')
   const [userKeyEdited, setUserKeyEdited] = useState(false)
@@ -1014,6 +1016,18 @@ function SystemTab() {
     [filteredUserProgress],
   )
 
+  useEffect(() => {
+    if (!deleteSuccess) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setDeleteSuccess('')
+    }, 2600)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [deleteSuccess])
+
   const resetCreateForm = useCallback(() => {
     setCreateForm({
       displayName: '',
@@ -1071,6 +1085,10 @@ function SystemTab() {
       })
       await loadUsers(payload?.user?.user_key || null)
     } catch (error) {
+      if (error?.code === 'SESSION_EXPIRED') {
+        return
+      }
+
       if (error?.status === 404) {
         setCreateError(
           'Runner is outdated or not deployed with admin user creation. Deploy the latest runner-service or point VITE_RUNNER_API_URL to localhost:8787.',
@@ -1084,6 +1102,7 @@ function SystemTab() {
   }, [createForm, loadUsers, resetCreateForm, runnerConfigured])
 
   const clearDeleteState = useCallback(() => {
+    setDeleteMenuKey(null)
     setDeleteConfirmKey(null)
     setDeleteError('')
     setDeleteSuccess('')
@@ -1108,9 +1127,19 @@ function SystemTab() {
     setDeleteBusy(true)
     setDeleteError('')
     setDeleteSuccess('')
+    setDeleteMenuKey(null)
 
     try {
-      await runnerRequest(`/admin/users/${encodeURIComponent(selectedUserObj.user_key)}`, {
+      const deleteParams = new URLSearchParams()
+      if (selectedUserObj.auth_user_id) {
+        deleteParams.set('auth_user_id', selectedUserObj.auth_user_id)
+      }
+
+      const deletePath = deleteParams.size
+        ? `/admin/users/${encodeURIComponent(selectedUserObj.user_key)}?${deleteParams.toString()}`
+        : `/admin/users/${encodeURIComponent(selectedUserObj.user_key)}`
+
+      await runnerRequest(deletePath, {
         method: 'DELETE',
       })
 
@@ -1118,6 +1147,11 @@ function SystemTab() {
       setDeleteSuccess('User deleted.')
       await loadUsers(null)
     } catch (error) {
+      if (error?.code === 'SESSION_EXPIRED') {
+        clearDeleteState()
+        return
+      }
+
       if (error?.status === 404) {
         setDeleteError('User not found.')
       } else {
@@ -1126,7 +1160,7 @@ function SystemTab() {
     } finally {
       setDeleteBusy(false)
     }
-  }, [currentUserKey, loadUsers, selectedUserObj])
+  }, [clearDeleteState, currentUserKey, loadUsers, selectedUserObj])
 
   const subNavItems = [
     {
@@ -1164,59 +1198,105 @@ function SystemTab() {
       <div className="mt-3 flex flex-wrap items-start justify-between gap-3 border border-border-subtle bg-surface px-3 py-3">
         <div className="min-w-[240px] flex-1">
           <Label>Focus User</Label>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            {loadingUsers ? (
-              <span className="text-xs text-text-muted">Loading users…</span>
-            ) : (
-              <div className="w-56">
-                <CustomSelect
-                  value={selectedUser || ''}
-                  onChange={(value) => handleSelectUser(value)}
-                  options={users.map((user) => ({
-                    value: user.user_key,
-                    label: `${user.display_name}${user.is_admin ? ' ★' : ''}`,
-                  }))}
-                  placeholder="Select user…"
-                />
-              </div>
-            )}
-            {selectedUserObj ? (
-              <div className="flex items-center gap-2 text-[10px] text-text-muted">
-                <Badge color={selectedUserObj.is_admin ? 'accent' : 'muted'}>
-                  {selectedUserObj.is_admin ? 'Admin' : 'User'}
-                </Badge>
-                <span>{selectedUserObj.user_key}</span>
-                <span>{selectedUserObj.auth_user_id ? 'Linked auth' : 'Needs auth mapping'}</span>
+          <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              {loadingUsers ? (
+                <span className="text-xs text-text-muted">Loading users…</span>
+              ) : (
+                <div className="w-56">
+                  <CustomSelect
+                    value={selectedUser || ''}
+                    onChange={(value) => handleSelectUser(value)}
+                    options={users.map((user) => ({
+                      value: user.user_key,
+                      label: `${user.display_name}${user.is_admin ? ' ★' : ''}`,
+                    }))}
+                    placeholder="Select user…"
+                  />
+                </div>
+              )}
+              {selectedUserObj ? (
+                <div className="flex items-center gap-2 text-[10px] text-text-muted">
+                  <Badge color={selectedUserObj.is_admin ? 'accent' : 'muted'}>
+                    {selectedUserObj.is_admin ? 'Admin' : 'User'}
+                  </Badge>
+                  <span>{selectedUserObj.user_key}</span>
+                  <span>{selectedUserObj.auth_user_id ? 'Linked auth' : 'Needs auth mapping'}</span>
+                </div>
+              ) : null}
+            </div>
+
+            {selectedUserObj && !isCurrentUserSelected ? (
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteError('')
+                    if (deleteMenuKey === selectedUserObj.user_key) {
+                      setDeleteMenuKey(null)
+                      setDeleteConfirmKey(null)
+                      return
+                    }
+
+                    setDeleteConfirmKey(null)
+                    setDeleteMenuKey(selectedUserObj.user_key)
+                  }}
+                  className="inline-flex h-8 w-8 items-center justify-center border border-border-subtle text-text-muted transition-colors hover:border-accent hover:text-accent"
+                  title="User actions"
+                >
+                  <MoreHorizontal size={14} />
+                </button>
+
+                {deleteMenuKey === selectedUserObj.user_key && deleteConfirmKey !== selectedUserObj.user_key ? (
+                  <div className="absolute right-0 top-9 z-10 min-w-[128px] overflow-hidden border border-border-subtle bg-base shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuKey(null)
+                        setDeleteError('')
+                        setDeleteConfirmKey(selectedUserObj.user_key)
+                      }}
+                      className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-[11px] text-text-muted transition-colors hover:bg-surface hover:text-red-300"
+                    >
+                      <Trash2 size={11} />
+                      Delete user
+                    </button>
+                  </div>
+                ) : null}
+
+                {deleteConfirmKey === selectedUserObj.user_key ? (
+                  <div className="absolute right-0 top-9 z-20 w-[320px] border border-border-subtle bg-base p-3 shadow-lg">
+                    <p className="text-[11px] leading-5 text-text-primary">
+                      Delete <span className="font-medium">{selectedUserObj.display_name}</span>? This removes the Practicer login and user data.
+                    </p>
+                    {deleteError ? <p className="mt-2 text-[11px] text-red-400">{deleteError}</p> : null}
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteConfirmKey(null)
+                          setDeleteError('')
+                        }}
+                        disabled={deleteBusy}
+                        className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteUser()}
+                        disabled={deleteBusy}
+                        className="h-8 border border-red-500/35 px-3 text-[11px] font-medium text-red-300 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {deleteBusy ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
-          {deleteSuccess ? <p className="mt-3 text-[11px] text-accent">{deleteSuccess}</p> : null}
-          {deleteError ? <p className="mt-3 text-[11px] text-red-400">{deleteError}</p> : null}
-          {deleteConfirmKey === selectedUserObj?.user_key ? (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-red-500/30 bg-red-500/5 px-3 py-2.5">
-              <p className="text-[11px] text-text-primary">
-                Delete <span className="font-medium">{selectedUserObj.display_name}</span>? This removes the Practicer login and related user records.
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirmKey(null)}
-                  disabled={deleteBusy}
-                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteUser()}
-                  disabled={deleteBusy}
-                  className="h-8 border border-red-500/40 bg-red-500/10 px-3 text-[11px] font-medium text-red-300 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {deleteBusy ? 'Deleting…' : 'Delete'}
-                </button>
-              </div>
-            </div>
-          ) : null}
+          {deleteSuccess ? <p className="mt-3 text-[11px] text-accent">User deleted.</p> : null}
         </div>
         <div className="flex flex-col items-end gap-3">
           <div className="grid min-w-[280px] grid-cols-3 gap-2">
@@ -1224,26 +1304,6 @@ function SystemTab() {
             <StatBox label="Attempted" value={attemptedCount} />
             <StatBox label="Review" value={reviewCount} />
           </div>
-          {selectedUserObj ? (
-            <button
-              type="button"
-              onClick={() => {
-                setDeleteError('')
-                setDeleteSuccess('')
-                setDeleteConfirmKey((current) => (current === selectedUserObj.user_key ? null : selectedUserObj.user_key))
-              }}
-              disabled={deleteBusy || isCurrentUserSelected}
-              className={[
-                'h-8 border px-3 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                isCurrentUserSelected
-                  ? 'border-border-subtle text-text-muted'
-                  : 'border-red-500/35 text-red-300 hover:bg-red-500/10',
-              ].join(' ')}
-            >
-              <Trash2 size={11} className="mr-1 inline" />
-              {isCurrentUserSelected ? 'Current Account' : deleteConfirmKey === selectedUserObj.user_key ? 'Close Delete' : 'Delete User'}
-            </button>
-          ) : null}
         </div>
       </div>
 

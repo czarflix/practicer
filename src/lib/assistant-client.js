@@ -1,5 +1,9 @@
 import { supabase } from './supabase'
-import { normalizeSupabaseSessionError } from './supabase-session'
+import {
+  clearLocalSupabaseSession,
+  normalizeSupabaseSessionError,
+  SESSION_EXPIRED_MESSAGE,
+} from './supabase-session'
 
 function trimBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
@@ -41,6 +45,25 @@ function createRunnerRequestError(message, extra = {}) {
   error.name = 'RunnerRequestError'
   Object.assign(error, extra)
   return error
+}
+
+function isExpiredRunnerSessionResponse(status, message) {
+  return status === 401 && /invalid or expired session/i.test(String(message || ''))
+}
+
+async function maybeThrowExpiredRunnerSession(path, status, payload, text) {
+  const message = String(payload?.error || text || '').trim()
+  if (!isExpiredRunnerSessionResponse(status, message)) {
+    return
+  }
+
+  await clearLocalSupabaseSession(supabase)
+  throw createRunnerRequestError(SESSION_EXPIRED_MESSAGE, {
+    path,
+    status,
+    payload,
+    code: 'SESSION_EXPIRED',
+  })
 }
 
 async function getAccessToken() {
@@ -110,6 +133,7 @@ export async function runnerRequest(path, options = {}) {
   const payload = parseJsonSafely(text)
 
   if (!response.ok) {
+    await maybeThrowExpiredRunnerSession(path, response.status, payload, text)
     throw createRunnerRequestError(payload?.error || text || `Runner request failed (${response.status}).`, {
       path,
       status: response.status,
@@ -156,6 +180,7 @@ export async function assistantStream(path, body, handlers, options = {}) {
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => '')
     const payload = parseJsonSafely(text)
+    await maybeThrowExpiredRunnerSession(path, response.status, payload, text)
     throw createRunnerRequestError(payload?.error || text || `Assistant stream failed (${response.status}).`, {
       path,
       status: response.status,

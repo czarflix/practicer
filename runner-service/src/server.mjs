@@ -160,6 +160,11 @@ function statusCodeForUserProvisionError(error) {
   return 500
 }
 
+function logAdminDeleteFailure(level, details) {
+  const logger = level === 'error' ? console.error : console.warn
+  logger('[admin-user-delete] ' + JSON.stringify(details))
+}
+
 function looksLikeGenericCaseValue(value) {
   const source = String(value || '').trim()
   if (!source) {
@@ -969,41 +974,85 @@ async function handleAdminUserCreate(req, res) {
   }
 }
 
-async function handleAdminUserDelete(req, res, targetUserKey) {
+async function handleAdminUserDelete(req, res, targetUserKey, url) {
   const auth = await requireAdminAuth(req, res)
   if (!auth) {
     return
   }
 
-  const userKey = normalizeUserKey(targetUserKey)
-  if (!userKey) {
+  const requestedUserKey = normalizeUserKey(decodeURIComponent(String(targetUserKey || '')))
+  const providedAuthUserId = String(url.searchParams.get('auth_user_id') || '').trim()
+
+  if (!requestedUserKey) {
     sendError(req, res, 400, 'user_key is required.')
     return
   }
 
-  if (userKey === auth.userKey) {
-    sendError(req, res, 400, 'You cannot delete your own admin account.')
-    return
-  }
-
   try {
-    const { data: existingUser, error: lookupError } = await supabase
-      .from('app_users')
-      .select('user_key,display_name,auth_user_id')
-      .eq('user_key', userKey)
-      .maybeSingle()
+    const [pathLookup, authLookup] = await Promise.all([
+      supabase
+        .from('app_users')
+        .select('user_key,display_name,auth_user_id')
+        .eq('user_key', requestedUserKey)
+        .maybeSingle(),
+      providedAuthUserId
+        ? supabase
+            .from('app_users')
+            .select('user_key,display_name,auth_user_id')
+            .eq('auth_user_id', providedAuthUserId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ])
 
-    if (lookupError) {
-      throw lookupError
+    if (pathLookup.error) {
+      throw pathLookup.error
     }
 
-    if (!existingUser?.user_key) {
+    if (authLookup?.error) {
+      throw authLookup.error
+    }
+
+    const pathUser = pathLookup.data ?? null
+    const authUser = authLookup?.data ?? null
+    if (providedAuthUserId && pathUser?.user_key && authUser?.user_key && pathUser.user_key !== authUser.user_key) {
+      logAdminDeleteFailure('warn', {
+        actor_user_key: auth.userKey,
+        requested_user_key: requestedUserKey,
+        provided_auth_user_id: providedAuthUserId,
+        failure_reason: 'target_mismatch',
+        path_user_key: pathUser.user_key,
+        auth_user_key: authUser.user_key,
+      })
+      sendError(req, res, 409, 'Delete target mismatch.')
+      return
+    }
+
+    const targetUser = providedAuthUserId ? authUser : pathUser
+    if (!targetUser?.user_key) {
+      logAdminDeleteFailure('warn', {
+        actor_user_key: auth.userKey,
+        requested_user_key: requestedUserKey,
+        provided_auth_user_id: providedAuthUserId || null,
+        failure_reason: 'not_found',
+      })
       sendError(req, res, 404, 'User not found.')
       return
     }
 
-    if (existingUser.auth_user_id) {
-      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(existingUser.auth_user_id)
+    if (targetUser.user_key === auth.userKey) {
+      logAdminDeleteFailure('warn', {
+        actor_user_key: auth.userKey,
+        requested_user_key: requestedUserKey,
+        provided_auth_user_id: providedAuthUserId || null,
+        failure_reason: 'self_delete_blocked',
+        resolved_user_key: targetUser.user_key,
+      })
+      sendError(req, res, 400, 'You cannot delete your own admin account.')
+      return
+    }
+
+    if (targetUser.auth_user_id) {
+      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(targetUser.auth_user_id)
       if (authDeleteError && !/not found/i.test(String(authDeleteError.message || ''))) {
         throw authDeleteError
       }
@@ -1012,17 +1061,24 @@ async function handleAdminUserDelete(req, res, targetUserKey) {
     const { error: deleteError } = await supabase
       .from('app_users')
       .delete()
-      .eq('user_key', userKey)
+      .eq('user_key', targetUser.user_key)
 
     if (deleteError) {
       throw deleteError
     }
 
     sendJson(req, res, 200, {
-      deleted_user_key: existingUser.user_key,
-      display_name: existingUser.display_name,
+      deleted_user_key: targetUser.user_key,
+      display_name: targetUser.display_name,
     })
   } catch (error) {
+    logAdminDeleteFailure('error', {
+      actor_user_key: auth.userKey,
+      requested_user_key: requestedUserKey,
+      provided_auth_user_id: providedAuthUserId || null,
+      failure_reason: 'delete_failed',
+      message: error instanceof Error ? error.message : 'Failed to delete user.',
+    })
     sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to delete user.')
   }
 }
@@ -1296,7 +1352,7 @@ const server = http.createServer(async (req, res) => {
 
   const adminUserMatch = url.pathname.match(/^\/admin\/users\/([^/]+)$/)
   if (req.method === 'DELETE' && adminUserMatch) {
-    await handleAdminUserDelete(req, res, adminUserMatch[1])
+    await handleAdminUserDelete(req, res, adminUserMatch[1], url)
     return
   }
 
