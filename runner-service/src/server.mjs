@@ -969,6 +969,64 @@ async function handleAdminUserCreate(req, res) {
   }
 }
 
+async function handleAdminUserDelete(req, res, targetUserKey) {
+  const auth = await requireAdminAuth(req, res)
+  if (!auth) {
+    return
+  }
+
+  const userKey = normalizeUserKey(targetUserKey)
+  if (!userKey) {
+    sendError(req, res, 400, 'user_key is required.')
+    return
+  }
+
+  if (userKey === auth.userKey) {
+    sendError(req, res, 400, 'You cannot delete your own admin account.')
+    return
+  }
+
+  try {
+    const { data: existingUser, error: lookupError } = await supabase
+      .from('app_users')
+      .select('user_key,display_name,auth_user_id')
+      .eq('user_key', userKey)
+      .maybeSingle()
+
+    if (lookupError) {
+      throw lookupError
+    }
+
+    if (!existingUser?.user_key) {
+      sendError(req, res, 404, 'User not found.')
+      return
+    }
+
+    if (existingUser.auth_user_id) {
+      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(existingUser.auth_user_id)
+      if (authDeleteError && !/not found/i.test(String(authDeleteError.message || ''))) {
+        throw authDeleteError
+      }
+    }
+
+    const { error: deleteError } = await supabase
+      .from('app_users')
+      .delete()
+      .eq('user_key', userKey)
+
+    if (deleteError) {
+      throw deleteError
+    }
+
+    sendJson(req, res, 200, {
+      deleted_user_key: existingUser.user_key,
+      display_name: existingUser.display_name,
+    })
+  } catch (error) {
+    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to delete user.')
+  }
+}
+
 async function handleAssistantThreadsList(req, res, url) {
   const auth = await requireAssistantAuth(req, res)
   if (!auth) {
@@ -1233,6 +1291,12 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/admin/users') {
     await handleAdminUserCreate(req, res)
+    return
+  }
+
+  const adminUserMatch = url.pathname.match(/^\/admin\/users\/([^/]+)$/)
+  if (req.method === 'DELETE' && adminUserMatch) {
+    await handleAdminUserDelete(req, res, adminUserMatch[1])
     return
   }
 

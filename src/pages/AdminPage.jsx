@@ -854,7 +854,7 @@ function AnnouncementsTab({ userKey }) {
 /*  SYSTEM TAB  ·  Compact dashboard within 100vh                */
 /* ────────────────────────────────────────────────────────────── */
 function SystemTab() {
-  const { activeTrackKey } = useCurrentUser()
+  const { activeTrackKey, userKey: currentUserKey } = useCurrentUser()
   const [activeSection, setActiveSection] = useState('overview')
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
@@ -865,6 +865,10 @@ function SystemTab() {
   const [createBusy, setCreateBusy] = useState(false)
   const [createError, setCreateError] = useState('')
   const [createSuccess, setCreateSuccess] = useState(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteSuccess, setDeleteSuccess] = useState('')
+  const [deleteConfirmKey, setDeleteConfirmKey] = useState(null)
   const [copiedField, setCopiedField] = useState('')
   const [userKeyEdited, setUserKeyEdited] = useState(false)
   const [createForm, setCreateForm] = useState(() => ({
@@ -995,6 +999,7 @@ function SystemTab() {
   }, [filteredUserProgress, problemsByIdentity, allFlat, totalProblems])
 
   const selectedUserObj = users.find((u) => u.user_key === selectedUser)
+  const isCurrentUserSelected = selectedUserObj?.user_key === currentUserKey
   const adminCount = users.filter((u) => u.is_admin).length
   const mappedCount = users.filter((u) => Boolean(u.auth_user_id)).length
   const attemptedCount = filteredUserProgress.filter((row) => row.status === 'attempted').length
@@ -1019,6 +1024,7 @@ function SystemTab() {
     })
     setUserKeyEdited(false)
     setCreateError('')
+    setCreateSuccess(null)
   }, [])
 
   const handleCopy = useCallback(async (value, token) => {
@@ -1064,7 +1070,6 @@ function SystemTab() {
         generatedPassword: Boolean(payload?.credential?.generated),
       })
       await loadUsers(payload?.user?.user_key || null)
-      resetCreateForm()
     } catch (error) {
       if (error?.status === 404) {
         setCreateError(
@@ -1077,6 +1082,51 @@ function SystemTab() {
       setCreateBusy(false)
     }
   }, [createForm, loadUsers, resetCreateForm, runnerConfigured])
+
+  const clearDeleteState = useCallback(() => {
+    setDeleteConfirmKey(null)
+    setDeleteError('')
+    setDeleteSuccess('')
+  }, [])
+
+  const handleSelectUser = useCallback((nextUserKey) => {
+    clearDeleteState()
+    setSelectedUser(nextUserKey)
+  }, [clearDeleteState])
+
+  const handleDeleteUser = useCallback(async () => {
+    if (!selectedUserObj?.user_key) {
+      return
+    }
+
+    if (selectedUserObj.user_key === currentUserKey) {
+      setDeleteError('You cannot delete your own admin account.')
+      setDeleteConfirmKey(null)
+      return
+    }
+
+    setDeleteBusy(true)
+    setDeleteError('')
+    setDeleteSuccess('')
+
+    try {
+      const payload = await runnerRequest(`/admin/users/${encodeURIComponent(selectedUserObj.user_key)}`, {
+        method: 'DELETE',
+      })
+
+      setDeleteConfirmKey(null)
+      setDeleteSuccess('User deleted.')
+      await loadUsers(null)
+    } catch (error) {
+      if (error?.status === 404) {
+        setDeleteError('User not found.')
+      } else {
+        setDeleteError(error instanceof Error ? error.message : 'Failed to delete user.')
+      }
+    } finally {
+      setDeleteBusy(false)
+    }
+  }, [currentUserKey, loadUsers, selectedUserObj])
 
   const subNavItems = [
     {
@@ -1111,17 +1161,17 @@ function SystemTab() {
 
   const renderOverview = () => (
     <>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-border-subtle bg-surface px-3 py-3">
-        <div className="min-w-[220px]">
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-3 border border-border-subtle bg-surface px-3 py-3">
+        <div className="min-w-[240px] flex-1">
           <Label>Focus User</Label>
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-2 flex flex-wrap items-center gap-3">
             {loadingUsers ? (
               <span className="text-xs text-text-muted">Loading users…</span>
             ) : (
               <div className="w-56">
                 <CustomSelect
                   value={selectedUser || ''}
-                  onChange={(value) => setSelectedUser(value)}
+                  onChange={(value) => handleSelectUser(value)}
                   options={users.map((user) => ({
                     value: user.user_key,
                     label: `${user.display_name}${user.is_admin ? ' ★' : ''}`,
@@ -1140,11 +1190,60 @@ function SystemTab() {
               </div>
             ) : null}
           </div>
+          {deleteSuccess ? <p className="mt-3 text-[11px] text-accent">{deleteSuccess}</p> : null}
+          {deleteError ? <p className="mt-3 text-[11px] text-red-400">{deleteError}</p> : null}
+          {deleteConfirmKey === selectedUserObj?.user_key ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-red-500/30 bg-red-500/5 px-3 py-2.5">
+              <p className="text-[11px] text-text-primary">
+                Delete <span className="font-medium">{selectedUserObj.display_name}</span>? This removes the Practicer login and related user records.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmKey(null)}
+                  disabled={deleteBusy}
+                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteUser()}
+                  disabled={deleteBusy}
+                  className="h-8 border border-red-500/40 bg-red-500/10 px-3 text-[11px] font-medium text-red-300 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleteBusy ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
-        <div className="grid min-w-[280px] grid-cols-3 gap-2">
-          <StatBox label="Solved" value={a.solved} accent />
-          <StatBox label="Attempted" value={attemptedCount} />
-          <StatBox label="Review" value={reviewCount} />
+        <div className="flex flex-col items-end gap-3">
+          <div className="grid min-w-[280px] grid-cols-3 gap-2">
+            <StatBox label="Solved" value={a.solved} accent />
+            <StatBox label="Attempted" value={attemptedCount} />
+            <StatBox label="Review" value={reviewCount} />
+          </div>
+          {selectedUserObj ? (
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteError('')
+                setDeleteSuccess('')
+                setDeleteConfirmKey((current) => (current === selectedUserObj.user_key ? null : selectedUserObj.user_key))
+              }}
+              disabled={deleteBusy || isCurrentUserSelected}
+              className={[
+                'h-8 border px-3 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                isCurrentUserSelected
+                  ? 'border-border-subtle text-text-muted'
+                  : 'border-red-500/35 text-red-300 hover:bg-red-500/10',
+              ].join(' ')}
+            >
+              <Trash2 size={11} className="mr-1 inline" />
+              {isCurrentUserSelected ? 'Current Account' : deleteConfirmKey === selectedUserObj.user_key ? 'Close Delete' : 'Delete User'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -1242,7 +1341,7 @@ function SystemTab() {
                 <button
                   key={user.user_key}
                   type="button"
-                  onClick={() => setSelectedUser(user.user_key)}
+                  onClick={() => handleSelectUser(user.user_key)}
                   className={[
                     'w-full border px-3 py-3 text-left transition-colors',
                     isSelected
@@ -1348,213 +1447,164 @@ function SystemTab() {
   )
 
   const renderCreate = () => (
-    <div className="mt-3 grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-3 overflow-hidden">
-      <div className="flex flex-col gap-3">
-        <div className="border border-border-subtle bg-surface p-4">
-          <div className="flex items-center gap-2">
-            <Shield size={14} className="text-accent" />
-            <Label>Provisioning Flow</Label>
+    <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-[1180px] border border-border-subtle bg-surface p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-text-primary">Create User</h3>
           </div>
-          <div className="mt-3 space-y-3 text-[11px] leading-5 text-text-muted">
-            <p>The admin panel now creates the Supabase Auth account and the mapped `app_users` row in one action.</p>
-            <p>Use a temporary password, send it once, and ask the user to rotate it after first sign-in.</p>
-            <p>User keys are auto-shaped to the uppercase format the app already uses, but you can override before submit.</p>
-          </div>
-        </div>
-
-        <div className={`border p-4 ${runnerConfigured ? 'border-accent/30 bg-accent/5' : 'border-amber-500/30 bg-amber-500/10'}`}>
-          <Label>{runnerConfigured ? 'Runner Ready' : 'Runner Required'}</Label>
-          <p className={`mt-2 text-xs ${runnerConfigured ? 'text-text-primary' : 'text-amber-300'}`}>
-            {runnerConfigured
-              ? 'Secure admin creation is available because the runner API is configured for authenticated requests.'
-              : 'Set VITE_RUNNER_API_URL before using this form. Auth user creation is intentionally blocked from the browser-only client.'}
-          </p>
+          <button
+            type="button"
+            onClick={resetCreateForm}
+            className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+          >
+            Reset
+          </button>
         </div>
 
         {createSuccess ? (
-          <div className="border border-accent/30 bg-accent/5 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <Label>User Created</Label>
-                <p className="mt-1 text-sm font-medium text-text-primary">{createSuccess.display_name}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveSection('directory')}
-                className="h-8 border border-accent px-3 text-[11px] font-medium text-accent hover:bg-accent/10"
-              >
-                View in Directory
-              </button>
-            </div>
-            <div className="mt-3 space-y-2 text-[11px]">
-              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
-                <span className="text-text-muted">Email</span>
-                <button type="button" onClick={() => void handleCopy(createSuccess.email, 'success-email')} className="font-mono text-text-primary hover:text-accent">
-                  {createSuccess.email}
-                </button>
-              </div>
-              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
-                <span className="text-text-muted">User Key</span>
-                <button type="button" onClick={() => void handleCopy(createSuccess.user_key, 'success-user-key')} className="font-mono text-text-primary hover:text-accent">
-                  {createSuccess.user_key}
-                </button>
-              </div>
-              <div className="flex items-center justify-between gap-3 border border-border-subtle bg-base px-3 py-2">
-                <span className="text-text-muted">Password</span>
-                <button type="button" onClick={() => void handleCopy(createSuccess.password, 'success-password')} className="font-mono text-text-primary hover:text-accent">
-                  {createSuccess.password}
-                </button>
-              </div>
-            </div>
-            <p className="mt-2 text-[10px] text-text-muted">
-              {copiedField ? 'Copied to clipboard.' : createSuccess.generatedPassword ? 'Generated password shown once. Copy it before leaving this screen.' : 'Password echoed from the submitted form for handoff.'}
-            </p>
+          <div className="mt-4 flex items-center gap-3 border border-accent/30 bg-accent/5 px-4 py-3">
+            <Check size={14} className="shrink-0 text-accent" />
+            <p className="text-sm font-medium text-text-primary">User created.</p>
           </div>
         ) : null}
-      </div>
 
-      <div className="overflow-y-auto">
-        <div className="border border-border-subtle bg-surface p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-semibold text-text-primary">Create a new user</h3>
-              <p className="mt-1 text-xs text-text-muted">A single submit creates the auth login and links it to Practicer.</p>
-            </div>
-            <button
-              type="button"
-              onClick={resetCreateForm}
-              className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
-            >
-              Reset
-            </button>
-          </div>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <label className="block">
-              <Label>Display Name</Label>
-              <input
-                type="text"
-                value={createForm.displayName}
-                onChange={(event) => {
-                  const value = event.target.value
-                  setCreateForm((current) => ({ ...current, displayName: value }))
-                }}
-                placeholder="Ayan Kapoor"
-                className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 text-sm text-text-primary outline-none focus:border-accent"
-              />
-            </label>
-
-            <label className="block">
-              <Label>Email</Label>
-              <div className="relative mt-2">
-                <Mail size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                <input
-                  type="email"
-                  value={createForm.email}
-                  onChange={(event) => {
-                    const value = event.target.value
-                    setCreateForm((current) => ({ ...current, email: value }))
-                  }}
-                  placeholder="name@example.com"
-                  className="h-10 w-full border border-border-subtle bg-base pl-10 pr-3 text-sm text-text-primary outline-none focus:border-accent"
-                />
-              </div>
-            </label>
-
-            <label className="block">
-              <Label>User Key</Label>
-              <input
-                type="text"
-                value={createForm.userKey}
-                onChange={(event) => {
-                  setUserKeyEdited(true)
-                  setCreateForm((current) => ({ ...current, userKey: normalizeAdminUserKey(event.target.value) }))
-                }}
-                placeholder="AYAN"
-                className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 font-mono text-sm uppercase text-text-primary outline-none focus:border-accent"
-              />
-              <p className="mt-1 text-[10px] text-text-muted">Auto-generated from display name or email until you edit it.</p>
-            </label>
-
-            <div className="block">
-              <Label>Access Level</Label>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {[
-                  { value: false, label: 'Standard', hint: 'Learner access' },
-                  { value: true, label: 'Admin', hint: 'Can open admin routes' },
-                ].map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    onClick={() => setCreateForm((current) => ({ ...current, isAdmin: option.value }))}
-                    className={[
-                      'border px-3 py-3 text-left transition-colors',
-                      createForm.isAdmin === option.value
-                        ? 'border-accent/40 bg-accent/10'
-                        : 'border-border-subtle bg-base hover:border-accent/20 hover:bg-surface-hover',
-                    ].join(' ')}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Shield size={13} className={createForm.isAdmin === option.value ? 'text-accent' : 'text-text-muted'} />
-                      <span className="text-sm font-medium text-text-primary">{option.label}</span>
-                    </div>
-                    <p className="mt-1 text-[10px] text-text-muted">{option.hint}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-5 border border-border-subtle bg-base p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <KeyRound size={14} className="text-accent" />
-                <div>
-                  <Label>Temporary Password</Label>
-                  <p className="mt-1 text-[11px] text-text-muted">Generate a strong starter password, then share it once.</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCreateForm((current) => ({ ...current, password: buildGeneratedPassword() }))}
-                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
-                >
-                  Generate
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleCopy(createForm.password, 'draft-password')}
-                  className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
-                >
-                  <Copy size={11} className="mr-1 inline" />
-                  {copiedField === 'draft-password' ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-            </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <label className="block">
+            <Label>Display Name</Label>
             <input
               type="text"
-              value={createForm.password}
-              onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
-              className="mt-3 h-10 w-full border border-border-subtle bg-surface px-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+              value={createForm.displayName}
+              onChange={(event) => {
+                const value = event.target.value
+                setCreateError('')
+                setCreateSuccess(null)
+                setCreateForm((current) => ({ ...current, displayName: value }))
+              }}
+              placeholder="Ayan Kapoor"
+              className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 text-sm text-text-primary outline-none focus:border-accent"
             />
-          </div>
+          </label>
 
-          {createError ? <p className="mt-4 text-[11px] text-red-400">{createError}</p> : null}
+          <label className="block">
+            <Label>Email</Label>
+            <div className="relative mt-2">
+              <Mail size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+              <input
+                type="email"
+                value={createForm.email}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setCreateError('')
+                  setCreateSuccess(null)
+                  setCreateForm((current) => ({ ...current, email: value }))
+                }}
+                placeholder="name@example.com"
+                className="h-10 w-full border border-border-subtle bg-base pl-10 pr-3 text-sm text-text-primary outline-none focus:border-accent"
+              />
+            </div>
+          </label>
 
-          <div className="mt-5 flex items-center justify-between gap-3">
-            <p className="text-[11px] text-text-muted">
-              The form submits through the runner with your current admin session, so auth creation never happens in the browser directly.
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleCreateUser()}
-              disabled={createBusy || !runnerConfigured}
-              className="h-10 border border-accent bg-accent px-4 text-sm font-medium text-black hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {createBusy ? 'Creating…' : 'Create User'}
-            </button>
+          <label className="block">
+            <Label>User Key</Label>
+            <input
+              type="text"
+              value={createForm.userKey}
+              onChange={(event) => {
+                setUserKeyEdited(true)
+                setCreateError('')
+                setCreateSuccess(null)
+                setCreateForm((current) => ({ ...current, userKey: normalizeAdminUserKey(event.target.value) }))
+              }}
+              placeholder="AYAN"
+              className="mt-2 h-10 w-full border border-border-subtle bg-base px-3 font-mono text-sm uppercase text-text-primary outline-none focus:border-accent"
+            />
+          </label>
+
+          <div className="block">
+            <Label>Access Level</Label>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {[
+                { value: false, label: 'Standard', hint: 'Learner access' },
+                { value: true, label: 'Admin', hint: 'Can open admin routes' },
+              ].map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => {
+                    setCreateError('')
+                    setCreateSuccess(null)
+                    setCreateForm((current) => ({ ...current, isAdmin: option.value }))
+                  }}
+                  className={[
+                    'border px-3 py-3 text-left transition-colors',
+                    createForm.isAdmin === option.value
+                      ? 'border-accent/40 bg-accent/10'
+                      : 'border-border-subtle bg-base hover:border-accent/20 hover:bg-surface-hover',
+                  ].join(' ')}
+                >
+                  <div className="flex items-center gap-2">
+                    <Shield size={13} className={createForm.isAdmin === option.value ? 'text-accent' : 'text-text-muted'} />
+                    <span className="text-sm font-medium text-text-primary">{option.label}</span>
+                  </div>
+                  <p className="mt-1 text-[10px] text-text-muted">{option.hint}</p>
+                </button>
+              ))}
+            </div>
           </div>
+        </div>
+
+        <div className="mt-5 border border-border-subtle bg-base p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <KeyRound size={14} className="text-accent" />
+              <Label>Password</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateError('')
+                  setCreateSuccess(null)
+                  setCreateForm((current) => ({ ...current, password: buildGeneratedPassword() }))
+                }}
+                className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+              >
+                Generate
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCopy(createForm.password, 'draft-password')}
+                className="h-8 border border-border-subtle px-3 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+              >
+                <Copy size={11} className="mr-1 inline" />
+                {copiedField === 'draft-password' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+          <input
+            type="text"
+            value={createForm.password}
+            onChange={(event) => {
+              setCreateError('')
+              setCreateSuccess(null)
+              setCreateForm((current) => ({ ...current, password: event.target.value }))
+            }}
+            className="mt-3 h-10 w-full border border-border-subtle bg-surface px-3 font-mono text-sm text-text-primary outline-none focus:border-accent"
+          />
+        </div>
+
+        {createError ? <p className="mt-4 text-[11px] text-red-400">{createError}</p> : null}
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void handleCreateUser()}
+            disabled={createBusy}
+            className="h-10 border border-accent bg-accent px-4 text-sm font-medium text-black hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {createBusy ? 'Creating…' : 'Create User'}
+          </button>
         </div>
       </div>
     </div>
