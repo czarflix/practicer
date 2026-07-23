@@ -76,6 +76,10 @@ Visible and hidden fixtures are compared using deterministic result normalizatio
 - SQL parsing/allowlisting is intentionally conservative and should be expanded with a real parser and adversarial tests before exposing the service broadly.
 - The public repository includes deployment instructions but does not itself prove the current hosted deployment state.
 
+## Dependency security status
+
+The 2026-07-23 audit observed 52 open Dependabot alerts on the default branch (1 critical, 19 high, 25 medium, and 7 low). They remain open and must be triaged before a shared deployment; this portfolio pass did not silently dismiss or upgrade them.
+
 Local-first review flow:
 
 ```bash
