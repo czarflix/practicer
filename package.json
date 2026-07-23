@@ -1,6 +1,9 @@
 {
   "name": "dsa-app",
   "private": true,
+  "overrides": {
+    "dompurify": "3.4.12"
+  },
   "version": "0.0.0",
   "type": "module",
   "scripts": {
