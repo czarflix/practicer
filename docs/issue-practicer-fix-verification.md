@@ -26,7 +26,7 @@ It was initially minimal because each change was owned by the existing runner, m
 - The public default-branch lockfile still contains a nested older DOMPurify entry. The three GitHub alerts are therefore valid remote findings, not merely stale metadata. This repair branch resolves 3.4.12 and audits clean.
 - The tracked migrations do not contain the DSA or SQL corpus rows, so the claimed `300 + 148` count cannot be reproduced from this tree.
 - The Netlify provider URL returned HTTP 200, while both custom hostnames failed DNS resolution and the runner execution path could not be externally exercised.
-- A redacted current-tree scan found zero findings. A bounded all-ref history scan found seven generic API-key findings in the initial commit. No credential value was printed or copied.
+- A redacted current-tree scan found zero findings. A bounded all-ref history scan found seven generic API-key signatures in the initial commit. A follow-up, value-free classification identified the repeated Supabase values as browser-safe `sb_publishable_` keys, the 36-character values as non-secret record identifiers, and the SQL password as an explicit replacement placeholder. No service-role or `sb_secret_` value was detected, printed, or copied.
 
 ## Pass 2 Clean Fix Shape
 
@@ -94,7 +94,7 @@ No frontend application component, provider configuration, credential, deploymen
 - Frontend provider smoke: `https://practice-czarflix.netlify.app/` returned HTTP 200.
 - Custom frontend and runner DNS: unresolved; live grading unverified.
 - Current-tree gitleaks scan with full redaction: 0 findings.
-- Bounded all-ref gitleaks scan (`--all`, 5 MB per-file bound, full redaction): 7 findings, all in initial commit `a445c2a8dcdd`, at `.env.example`, `check_missing.mjs`, two legacy handoff documents, and `test_db.mjs`. Values were never displayed.
+- Bounded all-ref gitleaks scan (`--all`, 5 MB per-file bound, full redaction): 7 generic signatures, all in initial commit `a445c2a8dcdd`, at `.env.example`, `check_missing.mjs`, two legacy handoff documents, and `test_db.mjs`. Value-free shape checks classified them as Supabase publishable keys, record identifiers, or an explicit password placeholder; no privileged credential was identified and values were never displayed.
 
 Determinism review: tests use no network, sleeps, shared database, or execution-order state. Random schema/check identifiers are asserted by shape and uniqueness rather than by fixed values.
 
@@ -118,4 +118,4 @@ None observed.
 - The new RLS migration is not applied or integration-tested against the hosted Supabase project.
 - Hosted runner health and execution are unverified.
 - Corpus totals cannot be verified without tracked source datasets or a sanitized reproducible export.
-- Historical generic API-key findings require provider-side rotation confirmation and a coordinated history rewrite. Both were outside this task's authorization.
+- No privileged historical credential was identified. Supabase publishable keys are designed for browser distribution and are constrained by database authorization/RLS; they are not service-role secrets. History rewriting is therefore not required for these seven signatures, though normal Supabase key lifecycle controls still apply.
