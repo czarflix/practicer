@@ -49,7 +49,40 @@ function getPool() {
   return _pool
 }
 
-const CONTROL_PLANE_SQL = /\b(?:ALTER\s+SYSTEM|COPY\s+.*\b(?:PROGRAM|FROM|TO)\b|CREATE\s+EXTENSION|GRANT|REVOKE|LOAD|VACUUM|SET\s+ROLE|SET\s+SESSION\s+AUTHORIZATION|DO)\b/i
+const CONTROL_PLANE_SQL = /\b(?:ALTER\s+(?:SYSTEM|ROLE|USER|DATABASE|SCHEMA|TABLESPACE)|COPY\s+.*\b(?:PROGRAM|FROM|TO)\b|CREATE\s+(?:EXTENSION|ROLE|USER|DATABASE|SCHEMA|TABLESPACE)|DROP\s+(?:ROLE|USER|DATABASE|SCHEMA|TABLESPACE)|GRANT|REVOKE|LOAD|VACUUM|SET\s+(?:(?:LOCAL|SESSION)\s+)?SEARCH_PATH|SET\s+ROLE|SET\s+SESSION\s+AUTHORIZATION|DO)\b/i
+
+export function validateSqlSubmission(userSql) {
+  if (typeof userSql !== 'string') {
+    throw new Error('SQL submission must be a string')
+  }
+  if (userSql.length > runnerConfig.maxSqlChars) {
+    throw new Error(`SQL submission exceeds the ${runnerConfig.maxSqlChars} character limit`)
+  }
+  if (CONTROL_PLANE_SQL.test(userSql)) {
+    throw new Error('SQL submission contains a blocked control-plane operation')
+  }
+}
+
+export function selectSqlFixtures({ fixtures, selectedCaseIds, includeHidden = false }) {
+  const eligibleFixtures = includeHidden
+    ? fixtures
+    : fixtures.filter((fixture) => fixture.is_public === true)
+
+  const selected =
+    Array.isArray(selectedCaseIds) && selectedCaseIds.length > 0
+      ? eligibleFixtures.filter((fixture) => selectedCaseIds.includes(fixture.fixture_key))
+      : eligibleFixtures
+
+  if (selected.length === 0) {
+    throw new Error(
+      selectedCaseIds && selectedCaseIds.length > 0
+        ? 'None of the selected_case_ids matched eligible fixture keys'
+        : 'No eligible fixtures available for this problem',
+    )
+  }
+
+  return selected
+}
 
 // ─── Value normalisation ─────────────────────────────────────────────────────
 
@@ -201,8 +234,13 @@ function compareResults(actualCols, actualRows, expectedCols, expectedRows, comp
  * @param {'query'|'script'} submissionKind
  * @returns {Promise<object>} per-case result record
  */
-async function runFixture(client, fixture, userSql, submissionKind) {
+export async function runFixture(client, fixture, userSql, submissionKind) {
   const schemaName = `sql_run_${randomBytes(4).toString('hex')}`
+  const isPublic = fixture.is_public === true
+  const resultId = isPublic
+    ? fixture.fixture_key
+    : `hidden-check-${randomBytes(6).toString('hex')}`
+  const resultLabel = isPublic ? fixture.label || fixture.fixture_key : 'Hidden check'
 
   try {
     await client.query('BEGIN')
@@ -248,24 +286,30 @@ async function runFixture(client, fixture, userSql, submissionKind) {
     await client.query('ROLLBACK')
 
     return {
-      id: fixture.fixture_key,
-      label: fixture.label || fixture.fixture_key,
+      id: resultId,
+      label: resultLabel,
       passed: comparison.passed,
-      expected: { columns: expectedCols, rows: expectedRows },
-      output: { columns: actualCols, rows: actualRows },
+      expected: isPublic ? { columns: expectedCols, rows: expectedRows } : null,
+      output: isPublic ? { columns: actualCols, rows: actualRows } : null,
       error: null,
-      message: comparison.message || (comparison.passed ? 'Passed' : 'Failed'),
+      message: isPublic
+        ? comparison.message || (comparison.passed ? 'Passed' : 'Failed')
+        : comparison.passed
+          ? 'Passed'
+          : 'Hidden check failed',
     }
-  } catch (error) {
+  } catch {
     // Always roll back, even on unexpected errors
     await client.query('ROLLBACK').catch(() => undefined)
     return {
-      id: fixture.fixture_key,
-      label: fixture.label || fixture.fixture_key,
+      id: resultId,
+      label: resultLabel,
       passed: false,
-      expected: { columns: fixture.expected_columns || [], rows: fixture.expected_rows || [] },
-      output: { columns: [], rows: [] },
-      error: error instanceof Error ? error.message : String(error),
+      expected: isPublic
+        ? { columns: fixture.expected_columns || [], rows: fixture.expected_rows || [] }
+        : null,
+      output: isPublic ? { columns: [], rows: [] } : null,
+      error: 'SQL execution failed.',
       message: 'Execution error',
     }
   }
@@ -280,30 +324,21 @@ async function runFixture(client, fixture, userSql, submissionKind) {
  * @param {string}   opts.userSql          - SQL code submitted by user
  * @param {'query'|'script'} opts.submissionKind
  * @param {object[]} opts.fixtures         - all fixtures for the problem
- * @param {string[]|null} [opts.selectedCaseIds] - if truthy, only these fixture_keys
+ * @param {string[]|null} [opts.selectedCaseIds] - if truthy, only these eligible fixture_keys
+ * @param {boolean} [opts.includeHidden] - true only for submit/grading mode
  * @returns {Promise<object[]>} array of per-case result records
  */
-export async function executeSql({ userSql, submissionKind, fixtures, selectedCaseIds }) {
-  if (typeof userSql !== 'string' || userSql.length > runnerConfig.maxSqlChars) {
-    throw new Error(`SQL submission exceeds the ${runnerConfig.maxSqlChars} character limit`)
-  }
-  if (CONTROL_PLANE_SQL.test(userSql)) {
-    throw new Error('SQL submission contains a blocked control-plane operation')
-  }
+export async function executeSql({
+  userSql,
+  submissionKind,
+  fixtures,
+  selectedCaseIds,
+  includeHidden = false,
+}) {
+  validateSqlSubmission(userSql)
   const pool = getPool()
 
-  const toRun =
-    Array.isArray(selectedCaseIds) && selectedCaseIds.length > 0
-      ? fixtures.filter((f) => selectedCaseIds.includes(f.fixture_key))
-      : fixtures
-
-  if (toRun.length === 0) {
-    throw new Error(
-      selectedCaseIds && selectedCaseIds.length > 0
-        ? 'None of the selected_case_ids matched known fixture keys'
-        : 'No fixtures available for this problem',
-    )
-  }
+  const toRun = selectSqlFixtures({ fixtures, selectedCaseIds, includeHidden })
 
   const results = []
   for (const fixture of toRun) {

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.mjs",
-    "start": "node src/server.mjs"
+    "start": "node src/server.mjs",
+    "test": "node --test",
+    "check": "node --check src/server.mjs && node --check src/sql-runner.mjs && node --check src/corpus-loader.mjs && npm test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

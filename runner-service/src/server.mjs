@@ -361,6 +361,7 @@ async function processSqlRun({ runId, userKey, problemKey, trackKey, mode, solut
       submissionKind: spec.submission_kind,
       fixtures: spec.fixtures,
       selectedCaseIds: mode === 'run' ? selectedCaseIds : null,
+      includeHidden: mode === 'submit',
     })
 
     const testsPassed = caseResults.filter((r) => r.passed).length
@@ -400,19 +401,20 @@ async function processSqlRun({ runId, userKey, problemKey, trackKey, mode, solut
     if (mode === 'submit' && finalStatus === 'passed') {
       await markSqlProgressSolved(userKey, problemKey)
     }
-  } catch (error) {
+  } catch {
     const finishedAt = new Date().toISOString()
+    const publicError = 'SQL execution failed.'
 
     await supabase
       .from('code_runs')
       .update({
         status: 'error',
-        stderr: error instanceof Error ? error.message : String(error),
+        stderr: publicError,
         runner_meta: {
           mode,
           track_key: trackKey,
           language: 'sql',
-          processing_error: error instanceof Error ? error.message : String(error),
+          processing_error: publicError,
         },
         finished_at: finishedAt,
       })
@@ -468,7 +470,9 @@ async function createSqlRun(req, res, body) {
 
     // Validate selected_case_ids if specified
     if (mode === 'run' && selectedCaseIds.length > 0) {
-      const validIds = new Set(spec.fixtures.map((f) => f.fixture_key))
+      const validIds = new Set(
+        spec.fixtures.filter((fixture) => fixture.is_public === true).map((fixture) => fixture.fixture_key),
+      )
       const notFound = selectedCaseIds.filter((id) => !validIds.has(id))
       if (notFound.length > 0) {
         sendError(req, res, 400, `selected_case_ids not found: ${notFound.join(', ')}`)
@@ -477,10 +481,17 @@ async function createSqlRun(req, res, body) {
     }
 
     // Compute tests_total for the run record
+    const eligibleFixtures =
+      mode === 'submit' ? spec.fixtures : spec.fixtures.filter((fixture) => fixture.is_public === true)
     const fixturesForRun =
       mode === 'run' && selectedCaseIds.length > 0
-        ? spec.fixtures.filter((f) => selectedCaseIds.includes(f.fixture_key))
-        : spec.fixtures
+        ? eligibleFixtures.filter((fixture) => selectedCaseIds.includes(fixture.fixture_key))
+        : eligibleFixtures
+
+    if (fixturesForRun.length === 0) {
+      sendError(req, res, 400, 'No eligible fixtures are available for this run mode.')
+      return
+    }
 
     const { data: runRow, error: insertError } = await supabase
       .from('code_runs')
@@ -524,8 +535,8 @@ async function createSqlRun(req, res, body) {
       code,
       spec,
     })
-  } catch (error) {
-    sendError(req, res, 500, error instanceof Error ? error.message : 'Failed to create SQL run.')
+  } catch {
+    sendError(req, res, 500, 'Failed to create SQL run.')
   }
 }
 
