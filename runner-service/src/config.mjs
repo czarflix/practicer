@@ -39,6 +39,8 @@ export const runnerConfig = {
 
   maxTests: toNumber(process.env.RUNNER_MAX_TESTS, 150),
   maxCodeChars: toNumber(process.env.RUNNER_MAX_CODE_CHARS, 200000),
+  maxSqlChars: toNumber(process.env.RUNNER_MAX_SQL_CHARS, 50000),
+  sqlStatementTimeoutMs: toNumber(process.env.RUNNER_SQL_STATEMENT_TIMEOUT_MS, 5000),
   cpuTimeLimitSeconds: toNumber(process.env.RUNNER_TIME_LIMIT, 2),
   wallTimeLimitSeconds: toNumber(process.env.RUNNER_WALL_TIME_LIMIT, 5),
   memoryLimitKb: toNumber(process.env.RUNNER_MEMORY_LIMIT_KB, 262144),

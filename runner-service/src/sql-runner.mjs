@@ -49,6 +49,8 @@ function getPool() {
   return _pool
 }
 
+const CONTROL_PLANE_SQL = /\b(?:ALTER\s+SYSTEM|COPY\s+.*\b(?:PROGRAM|FROM|TO)\b|CREATE\s+EXTENSION|GRANT|REVOKE|LOAD|VACUUM|SET\s+ROLE|SET\s+SESSION\s+AUTHORIZATION|DO)\b/i
+
 // ─── Value normalisation ─────────────────────────────────────────────────────
 
 /**
@@ -204,6 +206,8 @@ async function runFixture(client, fixture, userSql, submissionKind) {
 
   try {
     await client.query('BEGIN')
+    await client.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(runnerConfig.sqlStatementTimeoutMs))}`)
+    await client.query(`SET LOCAL lock_timeout = ${Math.max(1, Math.floor(runnerConfig.sqlStatementTimeoutMs))}`)
     // Create an isolated schema for this fixture run
     await client.query(`CREATE SCHEMA "${schemaName}"`)
     // Restrict search path to our schema + public (for types/extensions)
@@ -280,6 +284,12 @@ async function runFixture(client, fixture, userSql, submissionKind) {
  * @returns {Promise<object[]>} array of per-case result records
  */
 export async function executeSql({ userSql, submissionKind, fixtures, selectedCaseIds }) {
+  if (typeof userSql !== 'string' || userSql.length > runnerConfig.maxSqlChars) {
+    throw new Error(`SQL submission exceeds the ${runnerConfig.maxSqlChars} character limit`)
+  }
+  if (CONTROL_PLANE_SQL.test(userSql)) {
+    throw new Error('SQL submission contains a blocked control-plane operation')
+  }
   const pool = getPool()
 
   const toRun =
