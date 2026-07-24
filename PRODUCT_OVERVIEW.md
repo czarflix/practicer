@@ -9,7 +9,7 @@ The source supports two tracks:
 - DSA practice with Python submissions, saved work, and test-case history.
 - SQL practice with schema/sample views and fixture-based query or script evaluation.
 
-## Source-backed product surfaces
+## Implemented features
 
 - Tier- and phase-oriented problem navigation.
 - Separate DSA and SQL workspace states.
@@ -18,16 +18,16 @@ The source supports two tracks:
 - Supabase migrations for application tables and row-level policies.
 - A runner service that delegates Python to a Judge0-compatible endpoint and executes SQL in a dedicated PostgreSQL database.
 
-These are implementation claims about the checked-in source. They are not claims about user counts, production traffic, evaluator accuracy, or current hosted-service availability.
+These features are present in the checked-in source. The repository does not establish user counts, production traffic, evaluator accuracy, or current hosted-service availability.
 
-## Corpus evidence
+## Corpus size
 
 The repository does not currently contain the complete DSA or SQL corpus payloads needed to reproduce a numeric problem count:
 
 - The DSA catalog migration derives rows from pre-existing database state.
 - The SQL migration defines corpus tables, while the runner's local fallback points to an out-of-repository generated artifact.
 
-The deterministic [machine-readable corpus report](./docs/corpus-count.json) therefore records both totals as `null` and marks `300 DSA + 148 SQL` unsupported by the current tracked tree. Numeric corpus claims should remain out of portfolio and resume copy until tracked data reproduces them.
+The deterministic [machine-readable corpus report](./docs/corpus-count.json) therefore records both totals as `null` and marks `300 DSA + 148 SQL` unsupported by the current tracked tree. Do not publish a numeric corpus claim until tracked data can reproduce it.
 
 ## Execution model
 
@@ -78,12 +78,12 @@ The runner tests cover policy and orchestration behavior with isolated fakes; th
 
 Repository metadata already provides a React/Supabase description and the topics `react`, `security`, `sql`, and `supabase`. The GitHub homepage field is still empty and requires an external metadata update after choosing the provider URL.
 
-## Security and dependency posture
+## Security and dependency status
 
 The runner is defense in depth, not an independently audited arbitrary-code sandbox. Deployment owners remain responsible for least-privilege credentials, network isolation, rate limits, egress controls, provider logging, and migration application.
 
-On 2026-07-23, both local npm audits on this repair branch reported zero vulnerabilities, and its lockfile resolves `dompurify@3.4.12` for Monaco and jsPDF dependency paths. GitHub still reported three open `dompurify` alerts (one medium and two low) because the public default-branch lockfile contains a nested older entry. The project does not claim zero GitHub alerts until the corrected lockfile is merged and the remote alerts clear.
+Dependency evidence is point in time. In the recorded 2026-07-24 verification, both local npm audits reported zero vulnerabilities, the checked-in lockfile resolved `dompurify@3.4.12` for Monaco and jsPDF dependency paths, and an authenticated GitHub Dependabot query reported zero open alerts. Re-run the audits, inspect lockfile resolution, and query current alerts before making an external dependency-security claim.
 
-## Safe portfolio framing
+## What this project demonstrates
 
-Practicer is safe to describe as a substantial interview-practice prototype with a React/Supabase frontend, a separate execution service, migration-backed data boundaries, and locally tested SQL-runner controls. Do not describe it as production-grade, as a secure sandbox, as a verified live grader, or as a 448-problem corpus until the missing deployment and tracked-data evidence exists.
+Practicer demonstrates a React/Supabase study interface, a separate execution service, migration-backed data boundaries, and locally tested SQL-runner controls. It does not establish a production-grade sandbox, a verified live grader, or a 448-problem corpus; those claims require deployment checks and reproducible tracked data that are not present here.

@@ -80,14 +80,14 @@ The machine-readable [corpus report](./docs/corpus-count.json) currently marks D
 
 ## Dependency security status
 
-Measured on 2026-07-23:
+Recorded verification on 2026-07-24:
 
 - `npm audit` at the repository root: 0 vulnerabilities.
 - `npm --prefix runner-service audit`: 0 vulnerabilities.
-- GitHub Dependabot API: 3 open `dompurify` alerts (1 medium, 2 low).
-- This repair branch resolves `dompurify@3.4.12` through the root override for both Monaco and jsPDF paths. The public default-branch lockfile still contains a nested older DOMPurify entry, so its three GitHub alerts remain valid until the corrected lockfile is merged and GitHub re-evaluates it.
+- The checked-in lockfile resolves `dompurify@3.4.12` for both Monaco and jsPDF dependency paths.
+- An authenticated GitHub Dependabot query reported 0 open alerts.
 
-Re-run both local audits and inspect the current GitHub alert API before changing these counts.
+These are point-in-time audit results, not a standing guarantee. Before publishing or updating dependency-security claims, re-run both audits, verify the lockfile-resolved versions, and query the current GitHub Dependabot alerts.
 
 Local-first review flow:
 
@@ -96,8 +96,6 @@ npm run generate:problem-visuals-local -- --limit=5
 npm run validate:problem-visuals -- --manifest=out/problem-visuals-generated/problem-visuals-local-manifest.json --require-files --allow-partial
 npm run sync:problem-visuals -- --mode=ingest --manifest=out/problem-visuals-generated/problem-visuals-local-manifest.json
 ```
-
-If `GOOGLE_CLOUD_PROJECT` is unset, local generation falls back to your active `gcloud` project. If ADC is broken, it falls back to `gcloud auth print-access-token`.
 
 ## Runner Service
 
