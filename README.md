@@ -9,7 +9,7 @@ Unified React + Supabase workspace for DSA and SQL practice, with a separate run
 ## App Setup
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -55,19 +55,21 @@ flowchart LR
     RUN --> DB
 ```
 
-The project is an active engineering prototype with a working local/deployment workflow. It is not described as a secure arbitrary-code sandbox or production-grade execution environment.
+The project is an active engineering prototype with a reproducible frontend build and a separately deployable runner. It is not described as a secure arbitrary-code sandbox or production-grade execution environment. The public frontend is currently a demo surface: the provider URL is reachable, but live grading remains unverified because the documented runner hostname does not resolve.
 
 ## Execution model and security boundaries
 
 - Python submissions are sent to the configured Judge0-compatible service with configured CPU, wall-time, memory, file-size, and test-count limits. The repository does not independently prove the provider's OS, filesystem, or network isolation.
 - SQL fixtures run in a dedicated PostgreSQL connection, a random per-run schema, and a transaction that is rolled back. A statement and lock timeout plus a small control-plane denylist are applied before execution.
 - SQL is not a read-only role: script exercises require controlled DML. `CREATE EXTENSION`, `COPY` transport/file operations, role changes, privilege changes, `DO`, `VACUUM`, and related control-plane operations are blocked, but deployment owners must still enforce a least-privilege database role and network isolation.
-- Hidden tests are loaded by the runner service and should not be sent to the browser. A deployment must verify that logs, error payloads, and database access do not disclose hidden fixtures.
+- Hidden SQL tests are loaded by the service-role runner. The checked-in RLS migration limits ordinary authenticated fixture reads to `is_public = true`, and runner results redact hidden fixture identifiers, labels, expected rows, output rows, and raw database errors. Apply and integration-test the migration in the target Supabase project before relying on that boundary.
 - Supabase row-level security is defined in `supabase/migrations/`; apply and test those migrations in the target project before making user-isolation claims.
 
 ## Evaluation
 
-Visible and hidden fixtures are compared using deterministic result normalization. Run the repository smoke and validation scripts after provisioning the required Supabase and execution-database services. No coverage percentage, problem count, user count, or production-usage claim is made here unless it is accompanied by a checked-in measurement.
+Visible and hidden fixtures are compared using deterministic result normalization. Local behavioral tests cover control-plane rejection, statement-size limits, timeout setup, random-schema isolation, rollback, hidden-fixture redaction, and public sample preservation. End-to-end execution still requires provisioned Supabase, Judge0, and PostgreSQL services.
+
+The machine-readable [corpus report](./docs/corpus-count.json) currently marks DSA and SQL totals as unverified because the tracked migrations depend on pre-existing database rows and the corpus payloads are not checked in. Do not use `300 DSA + 148 SQL` as a public claim from this repository state.
 
 ## Known limitations
 
@@ -78,7 +80,14 @@ Visible and hidden fixtures are compared using deterministic result normalizatio
 
 ## Dependency security status
 
-The 2026-07-23 audit observed 52 open Dependabot alerts on the default branch (1 critical, 19 high, 25 medium, and 7 low). They remain open and must be triaged before a shared deployment; this portfolio pass did not silently dismiss or upgrade them.
+Measured on 2026-07-23:
+
+- `npm audit` at the repository root: 0 vulnerabilities.
+- `npm --prefix runner-service audit`: 0 vulnerabilities.
+- GitHub Dependabot API: 3 open `dompurify` alerts (1 medium, 2 low).
+- This repair branch resolves `dompurify@3.4.12` through the root override for both Monaco and jsPDF paths. The public default-branch lockfile still contains a nested older DOMPurify entry, so its three GitHub alerts remain valid until the corrected lockfile is merged and GitHub re-evaluates it.
+
+Re-run both local audits and inspect the current GitHub alert API before changing these counts.
 
 Local-first review flow:
 
@@ -95,10 +104,11 @@ If `GOOGLE_CLOUD_PROJECT` is unset, local generation falls back to your active `
 Runner backend is in [runner-service](./runner-service/README.md).
 
 ```bash
-npm --prefix runner-service install
+npm --prefix runner-service ci
+npm --prefix runner-service test
 npm run runner:dev
 ```
 
 ## Deployment
 
-Deployment scripts and infra notes live under [deploy](./deploy/README.md).
+The verified frontend provider URL is [practice-czarflix.netlify.app](https://practice-czarflix.netlify.app/). The custom frontend and runner domains did not resolve during the 2026-07-23 check, so they are not advertised as working endpoints. Deployment manifests live under [deploy](./deploy/).

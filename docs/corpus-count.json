@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scope": "tracked repository sources only",
+  "verification_status": "unverified",
+  "counts": {
+    "dsa": null,
+    "sql": null,
+    "total": null
+  },
+  "tracked_sources": {
+    "dsa": null,
+    "sql": null
+  },
+  "migration_evidence": {
+    "dsa": {
+      "path": "supabase/migrations/202603070003_canonical_study_catalog.sql",
+      "finding": "populates study_problems from pre-existing database rows; it does not contain the corpus rows"
+    },
+    "sql": {
+      "path": "supabase/migrations/202603080001_problem_key_sql_track.sql",
+      "finding": "defines SQL corpus tables but does not seed the SQL problem corpus"
+    }
+  },
+  "public_claims": {
+    "300 DSA + 148 SQL": false,
+    "policy": "Do not publish a numeric corpus claim until both counts are reproduced from tracked sources."
+  }
+}
